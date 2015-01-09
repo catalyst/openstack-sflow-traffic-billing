@@ -110,7 +110,7 @@ class FlowCollector(object):
 
     def receive(self):
         """
-        Listen on the sFlow socket and decode incoming packets then yield them.
+        Listen on the sFlow socket, decode incoming packets and yield them.
         """
 
         while True:
