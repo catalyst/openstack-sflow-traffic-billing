@@ -312,8 +312,6 @@ def accounting(queue):
     while True:
         sflow_packet = queue.get()
 
-        print "packet get"
-
         for sample in sflow_packet['samples']:
             for flow in sample['flows']:
                 ip_layer = _find_first_layer(flow['layers'], 'IP')
@@ -374,14 +372,13 @@ def accounting(queue):
                 for direction in ('inbound', 'outbound'):
                     for billing in classified_networks.keys()+[unclassifiable_network]:
                         if traffic[direction][billing] > 0:
-                            print "Ceilometer: %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s" % {
-                                'octets': traffic[direction][billing],
+                            sys.stderr.write("Ceilometer: %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s\n" % {                                'octets': traffic[direction][billing],
                                 'address': address_string,
                                 'id': new_ip_ownership[address_string]['id'],
                                 'tenant_id': new_ip_ownership[address_string]['tenant_id'],
                                 'direction': direction,
                                 'billing': billing
-                            }
+                            })
 
                             # database_connection.commit()
             sys.stderr.write("%s debug: db flush complete, took %f seconds.\n" % (time.strftime('%x %X'), time.time() - start_time))
