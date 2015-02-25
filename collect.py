@@ -10,6 +10,7 @@ import sys
 import pprint
 import pickle
 import copy
+import ConfigParser
 import neutronclient.v2_0.client
 
 import pdb
@@ -243,7 +244,6 @@ def _neutron_router_ip_list(clients):
         routers = {router['id']: router for router in client.list_routers()['routers']}
 
         for port in ports:
-
             if port['device_id'] in routers:
                 external_ips = [ip['ip_address'] for ip in port['fixed_ips'] if ip['subnet_id'] in external_subnets]
                 tenant_id = routers[port['device_id']]['tenant_id']
@@ -261,50 +261,38 @@ def _neutron_ip_list(clients):
     ip_list.update(_neutron_router_ip_list(clients))
     return ip_list
 
+def _load_networks_from_file(filename):
+    networks = []
+
+    with open(filename, 'r') as fp:
+        for line in fp:
+            try:
+                networks.append(ipaddr.IPNetwork(line.strip()))
+            except:
+                continue
+
+    sys.stderr.write('%s debug: loaded %i networks from %s\n' % (time.strftime('%x %X'), len(networks), filename))
+
+    return networks
+
+
 def accounting(queue):
-    # import psycopg2
 
-    # database_connection = psycopg2.connect(DATABASE_CONNECT_STRING)
-    # database_cursor = database_connection.cursor()
+    config = ConfigParser.ConfigParser(allow_no_value=True)
+    config.read('accounting.cfg')
 
-    neutron_clients = [_neutron_client('test-1')]
+    neutron_clients = [_neutron_client(region[0].strip()) for region in config.items('regions')]
+
+    local_networks = _load_networks_from_file(config.get('settings','accounted-networks'))
+    classified_networks = {classification: _load_networks_from_file(networks) for classification, networks in config.items('classifications')}
+    unclassifiable_network = config.get('settings','unclassifiable')
 
     old_ip_ownership = _neutron_ip_list(neutron_clients)
-
-    local_networks = [
-        ipaddr.IPNetwork('10.17.0.0/16'),
-    ]
-
-    classified_networks = {
-        'local-rfc1918': [
-            ipaddr.IPNetwork('192.168.0.0/16'),
-            ipaddr.IPNetwork('10.0.0.0/8'),
-            ipaddr.IPNetwork('172.16.0.0/12'),
-        ],
-        'local-catalyst': [
-            ipaddr.IPNetwork('103.254.156.0/22'),
-            ipaddr.IPNetwork('150.242.40.0/22'),
-            ipaddr.IPNetwork('202.78.240.0/21'),
-            ipaddr.IPNetwork('2404:130::/32'),
-        ],
-        'national': [], # will be filled later from file
-    }
-
-    unclassifiable_network = 'international' # all that remains
 
     empty_totals_entry = {
         'inbound': {k:0 for k in classified_networks.keys()+[unclassifiable_network]},
         'outbound': {k:0 for k in classified_networks.keys()+[unclassifiable_network]},
     }
-
-    with open(NATIONAL_NETWORKS_FILE, 'r') as fp:
-        for line in fp:
-            try:
-                classified_networks['national'].append(ipaddr.IPNetwork(line.strip()))
-            except:
-                continue
-
-    sys.stderr.write('%s debug: loaded %i national networks\n' % (time.strftime('%x %X'), len(classified_networks['national'])))
 
     timestamp = int(time.time())
     totals = {}

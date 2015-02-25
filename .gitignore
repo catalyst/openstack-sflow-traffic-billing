@@ -2,6 +2,7 @@
 compressed
 
 # Local configuration
+networks/
 accounting.cfg
 
 # Byte-compiled / optimized / DLL files
