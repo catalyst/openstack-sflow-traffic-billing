@@ -10,7 +10,9 @@ import sys
 import pprint
 import pickle
 import copy
+import neutronclient.v2_0.client
 
+import pdb
 import logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
@@ -21,6 +23,22 @@ NATIONAL_NETWORKS_FILE = "compressed"
 BUFFER_FLUSH_INTERVAL = 20 # seconds
 
 DATABASE_CONNECT_STRING = "dbname=traffic user=fincham"
+
+OS_AUTH_URL = "https://api.ostst.wgtn.cat-it.co.nz:5000/v2.0"
+OS_NEUTRON_INSECURE = True
+
+class ForkedPdb(pdb.Pdb):
+    """A Pdb subclass that may be used
+    from a forked multiprocessing child
+
+    """
+    def interaction(self, *args, **kwargs):
+        _stdin = sys.stdin
+        try:
+            sys.stdin = file('/dev/stdin')
+            pdb.Pdb.interaction(self, *args, **kwargs)
+        finally:
+            sys.stdin = _stdin
 
 class FlowCollector(object):
     """
@@ -193,15 +211,73 @@ def _address_in_network_list(address, networks):
 def _struct_time_without_minutes(struct_time):
     return datetime.datetime(*struct_time[:4])
 
-def accounting(queue):
-    import psycopg2
+def _neutron_client(region):
+    return neutronclient.v2_0.client.Client(
+        username = os.getenv('OS_USERNAME'),
+        password = os.getenv('OS_PASSWORD'),
+        tenant_name = os.getenv('OS_TENANT_NAME'),
+        auth_url = OS_AUTH_URL,
+        region_name = region,
+        insecure = OS_NEUTRON_INSECURE,
+    )
 
-    database_connection = psycopg2.connect(DATABASE_CONNECT_STRING)
-    database_cursor = database_connection.cursor()
+def _neutron_floating_ip_list(clients):
+    ip_list = {}
+
+
+    for client in clients:
+        ip_list.update({
+            ip['floating_ip_address']: {'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in client.list_floatingips()['floatingips']
+        })
+
+    sys.stderr.write('%s debug: loaded %i OpenStack floating IPs\n' % (time.strftime('%x %X'), len(ip_list.keys())))
+    return ip_list
+
+def _neutron_router_ip_list(clients):
+    """
+    XXX this function is a mess, please refactor it
+    """
+
+    ip_list = {}
+
+    for client in clients:
+        external_networks = [network for network in client.list_networks()['networks'] if network['router:external']]
+        external_subnets = sum([network['subnets'] for network in external_networks], [])
+
+        ports = client.list_ports()['ports']
+        routers = {router['id']: router for router in client.list_routers()['routers']}
+
+        for port in ports:
+
+            if port['device_id'] in routers:
+                external_ips = [ip['ip_address'] for ip in port['fixed_ips'] if ip['subnet_id'] in external_subnets]
+                tenant_id = routers[port['device_id']]['tenant_id']
+
+                ip_list.update({
+                    ip: {'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
+                })
+
+    sys.stderr.write('%s debug: loaded %i OpenStack router IPs\n' % (time.strftime('%x %X'), len(ip_list.keys())))
+
+    return ip_list
+
+def _neutron_ip_list(clients):
+    ip_list = _neutron_floating_ip_list(clients)
+    ip_list.update(_neutron_router_ip_list(clients))
+    return ip_list
+
+def accounting(queue):
+    # import psycopg2
+
+    # database_connection = psycopg2.connect(DATABASE_CONNECT_STRING)
+    # database_cursor = database_connection.cursor()
+
+    neutron_clients = [_neutron_client('test-1')]
+
+    old_ip_ownership = _neutron_ip_list(neutron_clients)
 
     local_networks = [
-        ipaddr.IPNetwork('192.168.2.0/24'),
-        ipaddr.IPNetwork('192.168.192.0/20'),
+        ipaddr.IPNetwork('10.17.0.0/16'),
     ]
 
     classified_networks = {
@@ -229,7 +305,7 @@ def accounting(queue):
     with open(NATIONAL_NETWORKS_FILE, 'r') as fp:
         for line in fp:
             try:
-                classified_networks['national'].append(ipaddr.IPNetwork(line))
+                classified_networks['national'].append(ipaddr.IPNetwork(line.strip()))
             except:
                 continue
 
@@ -240,6 +316,8 @@ def accounting(queue):
 
     while True:
         sflow_packet = queue.get()
+
+        print "packet get"
 
         for sample in sflow_packet['samples']:
             for flow in sample['flows']:
@@ -282,23 +360,35 @@ def accounting(queue):
             start_time = time.time()
             sys.stderr.write("%s debug: doing db flush of %i local IPs\n" % (time.strftime('%x %X'), len(totals)))
 
+            new_ip_ownership = _neutron_ip_list(neutron_clients)
+
+            for address, details in new_ip_ownership.iteritems():
+                if address in old_ip_ownership and old_ip_ownership[address]['tenant_id'] == details['tenant_id']:
+                    sys.stderr.write("%s debug: ownership of %s changed during period\n" % (time.strftime('%x %X'), address))
+                    totals.pop(address, None)
+
+            old_ip_ownership = new_ip_ownership
+
             for address, traffic in totals.iteritems():
+                address_string = str(address)
+
+                if address_string not in new_ip_ownership:
+                    sys.stderr.write("%s debug: %s not a tenant IP, ignoring\n" % (time.strftime('%x %X'), address))
+                    continue
+
                 for direction in ('inbound', 'outbound'):
                     for billing in classified_networks.keys()+[unclassifiable_network]:
                         if traffic[direction][billing] > 0:
-                            query = "WITH upsert AS (UPDATE traffic SET octets=octets+%(octets)s WHERE address=%(address)s and hour=%(hour)s and direction=%(direction)s and billing=%(billing)s RETURNING *) INSERT INTO traffic(address, hour, direction, billing, octets) SELECT %(address)s, %(hour)s, %(direction)s, %(billing)s, %(octets)s WHERE NOT EXISTS (SELECT * FROM upsert);"
-                            database_cursor.execute(
-                                query,
-                                {
-                                    'octets': traffic[direction][billing],
-                                    'address': str(address),
-                                    'hour': _struct_time_without_minutes(time.localtime()),
-                                    'direction': direction,
-                                    'billing': billing
-                                }
-                            )
+                            print "Ceilometer: %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s" % {
+                                'octets': traffic[direction][billing],
+                                'address': address_string,
+                                'id': new_ip_ownership[address_string]['id'],
+                                'tenant_id': new_ip_ownership[address_string]['tenant_id'],
+                                'direction': direction,
+                                'billing': billing
+                            }
 
-            database_connection.commit()
+                            # database_connection.commit()
             sys.stderr.write("%s debug: db flush complete, took %f seconds.\n" % (time.strftime('%x %X'), time.time() - start_time))
             sys.stderr.write("%s debug: queue is now %i entries long.\n" % (time.strftime('%x %X'), queue.qsize()))
 
