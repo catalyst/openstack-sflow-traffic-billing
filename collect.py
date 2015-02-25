@@ -22,11 +22,6 @@ SFLOW_INTERFACE_INTERNAL = 0x3FFFFFFF
 NATIONAL_NETWORKS_FILE = "compressed"
 BUFFER_FLUSH_INTERVAL = 20 # seconds
 
-DATABASE_CONNECT_STRING = "dbname=traffic user=fincham"
-
-OS_AUTH_URL = "https://api.ostst.wgtn.cat-it.co.nz:5000/v2.0"
-OS_NEUTRON_INSECURE = True
-
 class ForkedPdb(pdb.Pdb):
     """A Pdb subclass that may be used
     from a forked multiprocessing child
@@ -216,9 +211,9 @@ def _neutron_client(region):
         username = os.getenv('OS_USERNAME'),
         password = os.getenv('OS_PASSWORD'),
         tenant_name = os.getenv('OS_TENANT_NAME'),
-        auth_url = OS_AUTH_URL,
+        auth_url = os.getenv('OS_AUTH_URL'),
         region_name = region,
-        insecure = OS_NEUTRON_INSECURE,
+        insecure = os.getenv('OS_NEUTRON_INSECURE'),
     )
 
 def _neutron_floating_ip_list(clients):
