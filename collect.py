@@ -331,12 +331,12 @@ def accounting(queue):
 
                 if sample['input'] == SFLOW_INTERFACE_INTERNAL:
                     direction = 'outbound'
-                    local_address = ip_layer['dst']
-                    remote_address = ip_layer['src']
-                else:
-                    direction = 'inbound'
                     local_address = ip_layer['src']
                     remote_address = ip_layer['dst']
+                else:
+                    direction = 'inbound'
+                    local_address = ip_layer['dst']
+                    remote_address = ip_layer['src']
 
                 if not _address_in_network_list(local_address, local_networks):
                     continue
