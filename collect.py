@@ -344,7 +344,7 @@ def accounting(queue):
             new_ip_ownership = _neutron_ip_list(neutron_clients)
 
             for address, details in new_ip_ownership.iteritems():
-                if address in old_ip_ownership and old_ip_ownership[address]['tenant_id'] == details['tenant_id']:
+                if address in old_ip_ownership and old_ip_ownership[address]['tenant_id'] != details['tenant_id']:
                     sys.stderr.write("%s debug: ownership of %s changed during period\n" % (time.strftime('%x %X'), address))
                     totals.pop(address, None)
 
