@@ -34,6 +34,8 @@ class FlowCollector(object):
         'C': 'CWR',
     }
 
+    SFLOW_INTERFACE_INTERNAL = 0x3FFFFFFF
+
     # how many layers of encapsulation at most will be decoded when a packet
     # is flattened
     PACKET_RECURSION_LIMIT = 10

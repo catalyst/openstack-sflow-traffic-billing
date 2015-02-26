@@ -16,7 +16,11 @@ import pprint
 import sys
 import time
 
+# XXX remove when debugging is complete
 import pdb
+
+# scapy sometimes throws uninteresting warnings when processing the truncated
+# packets provided by sFlow, they are not important in this context
 import logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
@@ -25,12 +29,12 @@ import neutronclient.v2_0.client
 
 import sflow
 
-SFLOW_INTERFACE_INTERNAL = 0x3FFFFFFF
 
 class ForkedPdb(pdb.Pdb):
     """
-    A Pdb subclass that may be used
-    from a forked multiprocessing child
+    A Pdb subclass that may be used from a forked multiprocessing child.
+
+    Borrowed from <http://stackoverflow.com/a/23654936> for debugging.
     """
 
     def interaction(self, *args, **kwargs):
@@ -43,7 +47,9 @@ class ForkedPdb(pdb.Pdb):
 
 def _debug(message, *args, **kwargs):
     """
-    Write debugging message to stdout w/ a timestamp. To be removed.
+    Write debugging message to stdout with a timestamp.
+
+    XXX To be removed and replaced with logging module.
     """
 
     sys.stderr.write("%s debug: %s\n" % (time.strftime('%x %X'), message.format(*args, **kwargs)))
@@ -126,7 +132,7 @@ def _neutron_floating_ip_list(clients):
             ip['floating_ip_address']: {'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in client.list_floatingips()['floatingips']
         })
 
-    _debug('loaded %i OpenStack floating IPs' % len(ip_list.keys()))
+    _debug("loaded %i OpenStack floating IPs" % len(ip_list.keys()))
     return ip_list
 
 def _neutron_router_ip_list(clients):
@@ -164,7 +170,7 @@ def _neutron_router_ip_list(clients):
                     ip: {'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
                 })
 
-    _debug('loaded %i OpenStack router IPs' % len(ip_list.keys()))
+    _debug("loaded %i OpenStack router IPs" % len(ip_list.keys()))
 
     return ip_list
 
@@ -195,7 +201,7 @@ def _load_networks_from_file(filename):
             except:
                 continue
 
-    _debug('loaded %i networks from %s' % (len(networks), filename))
+    _debug("loaded %i networks from %s" % (len(networks), filename))
 
     return networks
 
@@ -250,7 +256,7 @@ def accounting(queue):
                 ip_layer['src'] = ipaddr.IPAddress(ip_layer['src'])
                 ip_layer['dst'] = ipaddr.IPAddress(ip_layer['dst'])
 
-                if sample['input'] == SFLOW_INTERFACE_INTERNAL:
+                if sample['input'] == sflow.FlowCollector.SFLOW_INTERFACE_INTERNAL:
                     direction = 'outbound'
                     local_address = ip_layer['src']
                     remote_address = ip_layer['dst']

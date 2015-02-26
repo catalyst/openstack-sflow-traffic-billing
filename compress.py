@@ -2,8 +2,8 @@
 
 """
 Given a list of IPv4 or IPv6 networks (autodetected) on stdin or as a file,
-return a hopefully shorted optimised list by collapsing adjacent networks and
-supernets.
+return a hopefully shortened and optimised list by collapsing adjacent networks
+and supernets.
 
 Michael Fincham <michael.fincham@catalyst.net.nz>
 """
