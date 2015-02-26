@@ -42,7 +42,7 @@ class ForkedPdb(pdb.Pdb):
             sys.stdin = _stdin
 
 def _debug(message, *args, **kwargs):
-    sys.stderr.write("%s debug: %s\n" % (time.strftime('%x %X'), message.vformat(args, kwargs)))
+    sys.stderr.write("%s debug: %s\n" % (time.strftime('%x %X'), message.format(*args, **kwargs)))
 
 def _sum_header_lengths(flow):
     """
