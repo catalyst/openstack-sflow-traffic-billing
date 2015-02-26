@@ -12,21 +12,6 @@ import pickle
 
 from scapy.all import *
 
-import pdb
-
-class ForkedPdb(pdb.Pdb):
-    """
-    A Pdb subclass that may be used
-    from a forked multiprocessing child
-    """
-    def interaction(self, *args, **kwargs):
-        _stdin = sys.stdin
-        try:
-            sys.stdin = file('/dev/stdin')
-            pdb.Pdb.interaction(self, *args, **kwargs)
-        finally:
-            sys.stdin = _stdin
-
 class FlowCollector(object):
     """
     Listens for sFlow v5 flow records and decodes them as deeply as possible
@@ -95,8 +80,6 @@ class FlowCollector(object):
 
             for key, value in layer.fields.iteritems():
 
-                ForkedPdb().set_trace()
-
                 try:
                     pickle.dumps(value)
                     pickle_ok = True
@@ -106,7 +89,7 @@ class FlowCollector(object):
                 if pickle_ok:
                     decoded_layer[key] = value
                 else:
-                    decoded_layer[key] = value
+                    decoded_layer[key] = repr(value)
 
             payloads.append(decoded_layer)
 
