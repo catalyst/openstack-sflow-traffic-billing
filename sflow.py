@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Python sFlow collector utilising scapy for decoding of payloads.
+Python sFlow collector using scapy for decoding payloads.
 
 Michael Fincham <michael.fincham@catalyst.net.nz>
 """
