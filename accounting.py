@@ -42,30 +42,39 @@ class ForkedPdb(pdb.Pdb):
             sys.stdin = _stdin
 
 def _debug(message, *args, **kwargs):
+    """
+    Write debugging message to stdout w/ a timestamp. To be removed.
+    """
+
     sys.stderr.write("%s debug: %s\n" % (time.strftime('%x %X'), message.format(*args, **kwargs)))
 
 def _sum_header_lengths(flow):
     """
-    Return the sum of the lengths of the contiguous Ethernet and Dot1Q headers
-    of a flow.
+    Return the sum of the byte lengths of the contiguous Ethernet and Dot1Q
+    headers in a flow sample.
     """
 
     HEADER_LENGTHS = {
-        'Ether': 14,
-        'Dot1Q': 4,
+        'Ether': 14, # bytes
+        'Dot1Q': 4, # bytes
     }
 
     length = 0
 
     for layer in flow['layers']:
-        if layer['decoded_as'] not in HEADER_LENGTHS:
-            return length
+        if layer['decoded_as'] not in HEADER_LENGTHS: # Only count the contiguous
+            return length                             # Ether and Dot1Q headers at the
+                                                      # beginning of the sample
 
         length += HEADER_LENGTHS[layer['decoded_as']]
 
     return length
 
 def _find_first_layer(layers, layer_decoded_as):
+    """
+    Return the first layer of a certain type from a set of layers.
+    """
+
     for layer in layers:
         if layer['decoded_as'] == layer_decoded_as:
             return layer
@@ -73,12 +82,19 @@ def _find_first_layer(layers, layer_decoded_as):
     return None
 
 def _address_in_network_list(address, networks):
+    """
+    Returns true if address is within any of the networks.
+    """
+
     return any([address in network for network in networks])
 
-def _struct_time_without_minutes(struct_time):
-    return datetime.datetime(*struct_time[:4])
-
 def _neutron_client(region):
+    """
+    Returns an instance of the OpenStack Neutron client for the given region.
+    Authentication details are taken from the environment (usually these would
+    be provided by an OpenStack RC file).
+    """
+
     return neutronclient.v2_0.client.Client(
         username = os.getenv('OS_USERNAME'),
         password = os.getenv('OS_PASSWORD'),
@@ -89,8 +105,21 @@ def _neutron_client(region):
     )
 
 def _neutron_floating_ip_list(clients):
-    ip_list = {}
+    """
+    Return a list of all the floating IPs across a given list of clients along
+    with the associated tenant_id and floating IP address id.
 
+    >>> clients = [_neutron_client('test-1'), _neutron_client('test-2')]
+    >>> _neutron_floating_ip_list(clients)
+    {u'192.0.2.1': {'id': u'c60bd278-ed5c-4897-9e64-badd2073f96d',
+                         'tenant_id': u'ef3e926be03016dc6756f7ecd82498a2',
+                         'type': 'floating'},
+     u'192.0.2.2': {'id': u'd8b710eb-efa9-49ff-aa27-f731ad96a63b',
+                         'tenant_id': u'060cca3aa4c2198f8ff3183e99dc2d9f',
+                         'type': 'floating'}}
+    """
+
+    ip_list = {}
 
     for client in clients:
         ip_list.update({
@@ -102,8 +131,20 @@ def _neutron_floating_ip_list(clients):
 
 def _neutron_router_ip_list(clients):
     """
-    XXX this function is a mess, please refactor it
-    """
+    Return a list of all the router IPs across a given list of clients along
+    with the associated tenant_id and router id.
+
+    XXX Currently this function is rather inelegant and would benefit from some
+    expert attention.
+
+    >>> clients = [_neutron_client('test-1'), _neutron_client('test-2')]
+    >>> _neutron_router_ip_list(clients)
+    {u'192.0.2.1': {'id': u'd68d3e4a-ddc4-4113-82ec-59a0f445ed58',
+                         'tenant_id': u'b14a61424d89c3e25bb31082b5f34dd7',
+                         'type': 'router'},
+     u'192.0.2.2': {'id': u'2832bbe0-0597-440b-a8d0-b7cd5108c252',
+                         'tenant_id': u'adb73920d5525d53a8f0feb005a5dca9',
+                         'type': 'router'}}    """
 
     ip_list = {}
 
@@ -128,15 +169,27 @@ def _neutron_router_ip_list(clients):
     return ip_list
 
 def _neutron_ip_list(clients):
+    """
+    Collect all IPs that are interesting for billing from both floating IPs
+    and routers and return an aggregate dictionary.
+    """
+
     ip_list = _neutron_floating_ip_list(clients)
     ip_list.update(_neutron_router_ip_list(clients))
     return ip_list
 
 def _load_networks_from_file(filename):
+    """
+    Load a list of IPv4 and IPv6 networks from filename and return a list of
+    IPNetwork objects corresponding to any valid networks in the file.
+    """
+
     networks = []
 
     with open(filename, 'r') as fp:
         for line in fp:
+
+            # validate network and skip it if it doesn't
             try:
                 networks.append(ipaddr.IPNetwork(line.strip()))
             except:
@@ -148,6 +201,20 @@ def _load_networks_from_file(filename):
 
 
 def accounting(queue):
+    """
+    Run as a multiprocessing.Process given a multiprocessing.Queue in which
+    decoded sFlow packets will be inserted.
+
+    Processes the queued sFlow packets, classifies the traffic and periodically
+    sends updates to ceilometer.
+
+    IPs which move between tenants during the buffer_flush_interval will be ignored.
+
+    Records sent to ceilometer will be of the form:
+
+    78000 octets for IP 103.254.157.46 (id=f53d0048-8323-4982-8198-59eeacd090e1, tenant_id=74f66db8975d4895a94060d27b1ff441) to traffic.inbound.international
+    """
+
 
     config = ConfigParser.ConfigParser(allow_no_value=True)
     config.read('accounting.cfg')
@@ -212,7 +279,7 @@ def accounting(queue):
 
         if time.time() - timestamp >= buffer_flush_interval:
             start_time = time.time()
-            _debug("sending ceilometer data on %i local IPs" % len(totals))
+            _debug("sending ceilometer data for %i local IPs" % len(totals))
 
             new_ip_ownership = _neutron_ip_list(neutron_clients)
 
@@ -233,7 +300,7 @@ def accounting(queue):
                 for direction in ('inbound', 'outbound'):
                     for billing in classified_networks.keys()+[unclassifiable_network]:
                         if traffic[direction][billing] > 0:
-                            sys.stderr.write("Ceilometer: %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s\n" % {                                'octets': traffic[direction][billing],
+                            _debug("ceilometer record - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s\n" % {                                'octets': traffic[direction][billing],
                                 'address': address_string,
                                 'id': new_ip_ownership[address_string]['id'],
                                 'tenant_id': new_ip_ownership[address_string]['tenant_id'],
@@ -253,11 +320,14 @@ if __name__ == '__main__':
     _debug("starting sFlow and accounting processes...")
 
     accounting_packet_queue = multiprocessing.Queue()
-    accounting_process = multiprocessing.Process(target=accounting, args=(accounting_packet_queue,))
+    accounting_process = multiprocessing.Process(
+        target=accounting, args=(accounting_packet_queue,)
+    )
     accounting_process.start()
 
     collector = sflow.FlowCollector()
 
+    # receieve sFlow packets from the network and send them to the accounting process
     for packet in collector.receive():
         accounting_packet_queue.put(packet)
 
