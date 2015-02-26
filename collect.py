@@ -1,23 +1,20 @@
 #!/usr/bin/env python
 
-import time
-import datetime
-import socket
-from xdrlib import Unpacker
-from multiprocessing import Process, Queue
-import ipaddr
-import sys
-import pprint
-import pickle
-import copy
 import ConfigParser
-import neutronclient.v2_0.client
+import copy
+import datetime
+import ipaddr
+import multiprocessing
+import pprint
+import sys
+import time
 
 import pdb
 import logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 from scapy.all import *
+import neutronclient.v2_0.client
 
 import sflow
 
@@ -243,8 +240,8 @@ def accounting(queue):
 
 if __name__ == '__main__':
 
-    accounting_packet_queue = Queue()
-    accounting_process = Process(target=accounting, args=(accounting_packet_queue,))
+    accounting_packet_queue = multiprocessing.Queue()
+    accounting_process = multiprocessing.Process(target=accounting, args=(accounting_packet_queue,))
     accounting_process.start()
 
     collector = sflow.FlowCollector()
