@@ -127,6 +127,8 @@ def _neutron_floating_ip_list(clients):
 
     ip_list = {}
 
+    # collect up the list of floating IPs for each client in the list along with
+    # the tenant they belong to
     for client in clients:
         ip_list.update({
             ip['floating_ip_address']: {'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in client.list_floatingips()['floatingips']
@@ -155,17 +157,27 @@ def _neutron_router_ip_list(clients):
     ip_list = {}
 
     for client in clients:
-        external_networks = [network for network in client.list_networks()['networks'] if network['router:external']]
+        external_networks = [
+            network for network in client.list_networks()['networks'] if network['router:external']
+        ]
         external_subnets = sum([network['subnets'] for network in external_networks], [])
 
-        ports = client.list_ports()['ports']
-        routers = {router['id']: router for router in client.list_routers()['routers']}
+        ports = client.list_ports()['ports'] # get all ports in region for all devices
+        routers = {router['id']: router for router in client.list_routers()['routers']} # and get all routers
 
         for port in ports:
-            if port['device_id'] in routers:
-                external_ips = [ip['ip_address'] for ip in port['fixed_ips'] if ip['subnet_id'] in external_subnets]
+            if port['device_id'] in routers: # if the port belongs to a router...
+
+                # ... extract the IPs belonging to the port and check if they
+                # belong to a subnet which is part of an "external" network
+                external_ips = [
+                    ip['ip_address'] for ip in port['fixed_ips'] if ip['subnet_id'] in external_subnets
+                ]
+
                 tenant_id = routers[port['device_id']]['tenant_id']
 
+                # generate an ip_list compatible with the floating IP list, except here the
+                # id refers to the router itself rather than an IP address object
                 ip_list.update({
                     ip: {'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
                 })
@@ -195,7 +207,7 @@ def _load_networks_from_file(filename):
     with open(filename, 'r') as fp:
         for line in fp:
 
-            # validate network and skip it if it doesn't
+            # validate network by parsing it and skip if it doesn't validate
             try:
                 networks.append(ipaddr.IPNetwork(line.strip()))
             except:
@@ -221,18 +233,26 @@ def accounting(queue):
     78000 octets for IP 103.254.157.46 (id=f53d0048-8323-4982-8198-59eeacd090e1, tenant_id=74f66db8975d4895a94060d27b1ff441) to traffic.inbound.international
     """
 
-
     config = ConfigParser.ConfigParser(allow_no_value=True)
     config.read('accounting.cfg')
 
+    # the number of seconds between submissions to ceilometer
     buffer_flush_interval = int(config.get('settings','buffer-flush-interval'))
 
+    # connect to neutron for all regions where accting is desired
     neutron_clients = [_neutron_client(region[0].strip()) for region in config.items('regions')]
 
-    local_networks = _load_networks_from_file(config.get('settings','accounted-networks'))
-    classified_networks = {classification: _load_networks_from_file(networks) for classification, networks in config.items('classifications')}
-    unclassifiable_network = config.get('settings','unclassifiable')
+    # local_networks is the list of addresses at the local site that will be accounted
+    local_networks = _load_networks_from_file(config.get('settings','local-networks'))
 
+    # networks which will get a particular classification
+    classified_networks = {classification: _load_networks_from_file(networks) for classification, networks in config.items('classifications')}
+    unclassifiable_network = config.get('settings','unclassifiable') # fall back if no classification possible
+
+    # query OpenStack for the mappings of IP address to tenant so it can be checked later
+    # this allows an IP address to move between tenants during a buffer_flush_interval
+    # without the wrong tenant being billed for part of the traffic (the interval will instead
+    # be discarded)
     old_ip_ownership = _neutron_ip_list(neutron_clients)
 
     empty_totals_entry = {
@@ -246,16 +266,24 @@ def accounting(queue):
     while True:
         sflow_packet = queue.get()
 
+        # "samples" can be of several types, only "flow" samples will end up here
+        # XXX add checks so sflow code can be made more generic
         for sample in sflow_packet['samples']:
+
+            # every "flow" corresponds to a truncated packet pulled off the wire
+            # on one of the agents (e.g. routers)
             for flow in sample['flows']:
                 ip_layer = _find_first_layer(flow['layers'], 'IP')
 
-                if ip_layer is None:
-                    continue
+                if ip_layer is None: # ignore packets without an IP header as
+                    continue         # they won't have a source or destination address
 
                 ip_layer['src'] = ipaddr.IPAddress(ip_layer['src'])
                 ip_layer['dst'] = ipaddr.IPAddress(ip_layer['dst'])
 
+                # determine whether or not the packet was sampled inbound or outbound
+                # on the agent interface. agent interfaces should face transit providers,
+                # so this direction is also relative to the AS where this runs.
                 if sample['input'] == sflow.FlowCollector.SFLOW_INTERFACE_INTERNAL:
                     direction = 'outbound'
                     local_address = ip_layer['src']
@@ -265,11 +293,14 @@ def accounting(queue):
                     local_address = ip_layer['dst']
                     remote_address = ip_layer['src']
 
+                # ignore addresses not in the "local-networks" set, this will
+                # ignore transit packets
                 if not _address_in_network_list(local_address, local_networks):
                     continue
 
                 billing = None
 
+                # determine which billing class the packet belongs to, if any
                 for network_class, networks_in_class in classified_networks.iteritems():
                     if _address_in_network_list(remote_address, networks_in_class):
                         billing = network_class
@@ -281,14 +312,20 @@ def accounting(queue):
                 if local_address not in totals:
                     totals[local_address] = copy.deepcopy(empty_totals_entry)
 
+                # multiply the length of the packet's payload by the sampling rate to
+                # produce an estimate of the "real world" traffic it represents
+                # then increment the totals with that amount (in octets)
                 totals[local_address][direction][billing] += (flow['frame_length'] - flow['stripped'] - _sum_header_lengths(flow)) * sample['sampling_rate']
 
         if time.time() - timestamp >= buffer_flush_interval:
             start_time = time.time()
             _debug("sending ceilometer data for %i local IPs" % len(totals))
 
+            # re-request the mapping of IP addresses to tenants from OpenStack
             new_ip_ownership = _neutron_ip_list(neutron_clients)
 
+            # addresses where the owner tenant is no longer the same as the beginning
+            # of this interval are removed from the totals to be submitted
             for address, details in new_ip_ownership.iteritems():
                 if address in old_ip_ownership and old_ip_ownership[address]['tenant_id'] != details['tenant_id']:
                     _debug("ownership of %s changed during period" % address)
@@ -306,6 +343,7 @@ def accounting(queue):
                 for direction in ('inbound', 'outbound'):
                     for billing in classified_networks.keys()+[unclassifiable_network]:
                         if traffic[direction][billing] > 0:
+                            # XXX ceilometer submission will happen here
                             _debug("ceilometer record - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s\n" % {                                'octets': traffic[direction][billing],
                                 'address': address_string,
                                 'id': new_ip_ownership[address_string]['id'],
