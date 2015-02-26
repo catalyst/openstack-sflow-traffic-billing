@@ -13,7 +13,7 @@ This code should be considered "proof of concept" quality at this time.
 
 Lists of addresses should be stored in files in CIDR format (e.g. 192.0.2.0/24 or 2001:db8::/64) and specified in the `accounting.cfg` file.
 
-IP addresses "of interest" should be specified in a file of the same format and configured with the `accounted-networks` setting.
+IP addresses on the "local" network for which accounting data is collected should be specified in a file of the same format and configured with the `local-networks` setting.
 
 Traffic that is not able to be classified will be assigned a classification configured with the `unclassifiable` settings.
 
