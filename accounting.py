@@ -41,6 +41,9 @@ class ForkedPdb(pdb.Pdb):
         finally:
             sys.stdin = _stdin
 
+def _debug(message, *args, **kwargs):
+    sys.stderr.write("%s debug: %s\n" % (time.strftime('%x %X'), message.vformat(args, kwargs)))
+
 def _sum_header_lengths(flow):
     """
     Return the sum of the lengths of the contiguous Ethernet and Dot1Q headers
@@ -94,7 +97,7 @@ def _neutron_floating_ip_list(clients):
             ip['floating_ip_address']: {'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in client.list_floatingips()['floatingips']
         })
 
-    sys.stderr.write('%s debug: loaded %i OpenStack floating IPs\n' % (time.strftime('%x %X'), len(ip_list.keys())))
+    _debug('loaded %i OpenStack floating IPs' % len(ip_list.keys()))
     return ip_list
 
 def _neutron_router_ip_list(clients):
@@ -120,7 +123,7 @@ def _neutron_router_ip_list(clients):
                     ip: {'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
                 })
 
-    sys.stderr.write('%s debug: loaded %i OpenStack router IPs\n' % (time.strftime('%x %X'), len(ip_list.keys())))
+    _debug('loaded %i OpenStack router IPs' % len(ip_list.keys()))
 
     return ip_list
 
@@ -139,7 +142,7 @@ def _load_networks_from_file(filename):
             except:
                 continue
 
-    sys.stderr.write('%s debug: loaded %i networks from %s\n' % (time.strftime('%x %X'), len(networks), filename))
+    _debug('loaded %i networks from %s' % (len(networks), filename))
 
     return networks
 
@@ -209,13 +212,13 @@ def accounting(queue):
 
         if time.time() - timestamp >= buffer_flush_interval:
             start_time = time.time()
-            sys.stderr.write("%s debug: doing db flush of %i local IPs\n" % (time.strftime('%x %X'), len(totals)))
+            _debug("sending ceilometer data on %i local IPs" % len(totals))
 
             new_ip_ownership = _neutron_ip_list(neutron_clients)
 
             for address, details in new_ip_ownership.iteritems():
                 if address in old_ip_ownership and old_ip_ownership[address]['tenant_id'] != details['tenant_id']:
-                    sys.stderr.write("%s debug: ownership of %s changed during period\n" % (time.strftime('%x %X'), address))
+                    _debug("ownership of %s changed during period" % address)
                     totals.pop(address, None)
 
             old_ip_ownership = new_ip_ownership
@@ -224,7 +227,7 @@ def accounting(queue):
                 address_string = str(address)
 
                 if address_string not in new_ip_ownership:
-                    sys.stderr.write("%s debug: %s not a tenant IP, ignoring\n" % (time.strftime('%x %X'), address))
+                    _debug("%s not a tenant or router IP, ignoring" % address)
                     continue
 
                 for direction in ('inbound', 'outbound'):
@@ -238,15 +241,16 @@ def accounting(queue):
                                 'billing': billing
                             })
 
-                            # database_connection.commit()
-            sys.stderr.write("%s debug: db flush complete, took %f seconds.\n" % (time.strftime('%x %X'), time.time() - start_time))
-            sys.stderr.write("%s debug: queue is now %i entries long.\n" % (time.strftime('%x %X'), queue.qsize()))
+            _debug("ceilometer send complete, took %f seconds" % (time.time() - start_time))
+            _debug("queue is now %i entries long" % queue.qsize())
 
             totals = {}
             timestamp = int(time.time())
 
 
 if __name__ == '__main__':
+
+    _debug("starting sFlow and accounting processes...")
 
     accounting_packet_queue = multiprocessing.Queue()
     accounting_process = multiprocessing.Process(target=accounting, args=(accounting_packet_queue,))
