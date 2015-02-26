@@ -312,9 +312,9 @@ def accounting(queue):
                 if local_address not in totals:
                     totals[local_address] = copy.deepcopy(empty_totals_entry)
 
-                # multiply the length of the packet's payload by the sampling rate to
-                # produce an estimate of the "real world" traffic it represents
-                # then increment the totals with that amount (in octets)
+                # multiply the original length of the packetby the sampling
+                # rate to produce an estimate of the "real world" traffic it
+                # represents then increment the totals with that amount (in octets)
                 totals[local_address][direction][billing] += (flow['frame_length'] - flow['stripped'] - _sum_header_lengths(flow)) * sample['sampling_rate']
 
         if time.time() - timestamp >= buffer_flush_interval:
