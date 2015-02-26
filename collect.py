@@ -1,5 +1,12 @@
 #!/usr/bin/env python
 
+"""
+Use sFlow flow records to classify billable OpenStack traffic and submit this
+to ceilometer.
+
+Michael Fincham <michael.fincham@catalyst.net.nz>
+"""
+
 import ConfigParser
 import copy
 import datetime
@@ -19,7 +26,6 @@ import neutronclient.v2_0.client
 import sflow
 
 SFLOW_INTERFACE_INTERNAL = 0x3FFFFFFF
-BUFFER_FLUSH_INTERVAL = 20 # seconds
 
 class ForkedPdb(pdb.Pdb):
     """
