@@ -26,6 +26,7 @@ logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 from scapy.all import *
 import neutronclient.v2_0.client
+import ceilometerclient.client
 
 import sflow
 
@@ -152,7 +153,8 @@ def _neutron_router_ip_list(clients):
                          'type': 'router'},
      u'192.0.2.2': {'id': u'2832bbe0-0597-440b-a8d0-b7cd5108c252',
                          'tenant_id': u'adb73920d5525d53a8f0feb005a5dca9',
-                         'type': 'router'}}    """
+                         'type': 'router'}}
+    """
 
     ip_list = {}
 
@@ -343,6 +345,7 @@ def accounting(queue):
                 for direction in ('inbound', 'outbound'):
                     for billing in classified_networks.keys()+[unclassifiable_network]:
                         if traffic[direction][billing] > 0:
+
                             # XXX ceilometer submission will happen here
                             _debug("ceilometer record - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s\n" % {                                'octets': traffic[direction][billing],
                                 'address': address_string,
@@ -351,6 +354,21 @@ def accounting(queue):
                                 'direction': direction,
                                 'billing': billing
                             })
+
+                            # c = ceilometerclient.client.get_client('2', os_username=... os_password=... os_tenant_name=... os_region_name=... os_auth_url=...)
+
+                            # c.samples.create(
+                            #     source='name of your service',
+                            #     counter_name='traffic.%s.%s' % (direction, billing),
+                            #     counter_type='delta',
+                            #     counter_unit='byte',
+                            #     counter_volume=N,
+                            #     project_id=their_tenant_id,
+                            #     resource_id=uuid_of_fip_or_router,
+                            #     timestamp=datetime.utcnow().isoformat(),
+                            #     resource_metadata={}
+                            #     )
+
 
             _debug("ceilometer send complete, took %f seconds" % (time.time() - start_time))
             _debug("queue is now %i entries long" % queue.qsize())
