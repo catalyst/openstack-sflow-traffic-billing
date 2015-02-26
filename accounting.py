@@ -149,7 +149,7 @@ def accounting(queue):
     config = ConfigParser.ConfigParser(allow_no_value=True)
     config.read('accounting.cfg')
 
-    buffer_flush_interval = config.get('settings','buffer-flush-interval')
+    buffer_flush_interval = int(config.get('settings','buffer-flush-interval'))
 
     neutron_clients = [_neutron_client(region[0].strip()) for region in config.items('regions')]
 
