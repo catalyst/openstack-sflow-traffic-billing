@@ -22,10 +22,11 @@ SFLOW_INTERFACE_INTERNAL = 0x3FFFFFFF
 BUFFER_FLUSH_INTERVAL = 20 # seconds
 
 class ForkedPdb(pdb.Pdb):
-    """A Pdb subclass that may be used
-    from a forked multiprocessing child
-
     """
+    A Pdb subclass that may be used
+    from a forked multiprocessing child
+    """
+
     def interaction(self, *args, **kwargs):
         _stdin = sys.stdin
         try:
