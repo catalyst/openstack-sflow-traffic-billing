@@ -370,7 +370,8 @@ def accounting(queue):
                         if traffic[direction][billing] > 0:
 
                             # XXX ceilometer submission will happen here
-                            _debug("ceilometer record - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s\n" % {                                'octets': traffic[direction][billing],
+                            _debug("ceilometer record - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s\n" % {
+                                'octets': traffic[direction][billing],
                                 'address': address_string,
                                 'id': new_ip_ownership[address_string]['id'],
                                 'tenant_id': new_ip_ownership[address_string]['tenant_id'],
@@ -379,19 +380,17 @@ def accounting(queue):
                                 'region': new_ip_ownership[address_string]['region'],
                             })
 
-                            # c = ceilometerclient.client.get_client('2', os_username=... os_password=... os_tenant_name=... os_region_name=... os_auth_url=...)
-
-                            # c.samples.create(
-                            #     source='name of your service',
-                            #     counter_name='traffic.%s.%s' % (direction, billing),
-                            #     counter_type='delta',
-                            #     counter_unit='byte',
-                            #     counter_volume=N,
-                            #     project_id=their_tenant_id,
-                            #     resource_id=uuid_of_fip_or_router,
-                            #     timestamp=datetime.utcnow().isoformat(),
-                            #     resource_metadata={}
-                            #     )
+                            clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
+                                source='Traffic accounting',
+                                counter_name='traffic.%s.%s' % (direction, billing),
+                                counter_type='delta',
+                                counter_unit='byte',
+                                counter_volume=traffic[direction][billing],
+                                project_id=new_ip_ownership[address_string]['tenant_id'],
+                                resource_id=new_ip_ownership[address_string]['id'],
+                                timestamp=datetime.utcnow().isoformat(),
+                                resource_metadata={}
+                            )
 
 
             _debug("ceilometer send complete, took %f seconds" % (time.time() - start_time))
