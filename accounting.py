@@ -108,7 +108,22 @@ def _neutron_client(region):
         tenant_name = os.getenv('OS_TENANT_NAME'),
         auth_url = os.getenv('OS_AUTH_URL'),
         region_name = region,
-        insecure = os.getenv('OS_NEUTRON_INSECURE'),
+        insecure = os.getenv('OS_INSECURE'),
+    )
+
+def _ceilometer_client(region):
+    """
+    Returns an instance of the OpenStack Ceilometer client for the given region.
+    """
+
+    return ceilometerclient.client.get_client(
+        '2',
+        os_username = os.getenv('OS_USERNAME'),
+        os_password = os.getenv('OS_PASSWORD'),
+        os_tenant_name = os.getenv('OS_TENANT_NAME'),
+        os_auth_url = os.getenv('OS_AUTH_URL'),
+        os_region_name = region,
+        insecure = os.getenv('OS_INSECURE'),
     )
 
 def _neutron_floating_ip_list(clients):
@@ -120,19 +135,21 @@ def _neutron_floating_ip_list(clients):
     >>> _neutron_floating_ip_list(clients)
     {u'192.0.2.1': {'id': u'c60bd278-ed5c-4897-9e64-badd2073f96d',
                          'tenant_id': u'ef3e926be03016dc6756f7ecd82498a2',
-                         'type': 'floating'},
+                         'type': 'floating',
+                         'region': 'test-1'},
      u'192.0.2.2': {'id': u'd8b710eb-efa9-49ff-aa27-f731ad96a63b',
                          'tenant_id': u'060cca3aa4c2198f8ff3183e99dc2d9f',
-                         'type': 'floating'}}
+                         'type': 'floating',
+                         'region': 'test-1'}}
     """
 
     ip_list = {}
 
     # collect up the list of floating IPs for each client in the list along with
     # the tenant they belong to
-    for client in clients:
+    for region, components in clients.iteritems():
         ip_list.update({
-            ip['floating_ip_address']: {'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in client.list_floatingips()['floatingips']
+            ip['floating_ip_address']: {'region': region, 'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in components['neutron'].list_floatingips()['floatingips']
         })
 
     _debug("loaded %i OpenStack floating IPs" % len(ip_list.keys()))
@@ -150,15 +167,19 @@ def _neutron_router_ip_list(clients):
     >>> _neutron_router_ip_list(clients)
     {u'192.0.2.1': {'id': u'd68d3e4a-ddc4-4113-82ec-59a0f445ed58',
                          'tenant_id': u'b14a61424d89c3e25bb31082b5f34dd7',
-                         'type': 'router'},
+                         'type': 'router',
+                         'region': 'test-1'},
      u'192.0.2.2': {'id': u'2832bbe0-0597-440b-a8d0-b7cd5108c252',
                          'tenant_id': u'adb73920d5525d53a8f0feb005a5dca9',
-                         'type': 'router'}}
+                         'type': 'router',
+                         'region': 'test-1'}}
     """
 
     ip_list = {}
 
-    for client in clients:
+    for region, components in clients.iteritems():
+        client = components['neutron']
+
         external_networks = [
             network for network in client.list_networks()['networks'] if network['router:external']
         ]
@@ -241,8 +262,10 @@ def accounting(queue):
     # the number of seconds between submissions to ceilometer
     buffer_flush_interval = int(config.get('settings','buffer-flush-interval'))
 
-    # connect to neutron for all regions where accting is desired
-    neutron_clients = [_neutron_client(region[0].strip()) for region in config.items('regions')]
+    # connect to neutron and ceilometer for all regions where accting is desired
+    clients = {
+        region[0].strip(): {'neutron': _neutron_client(region[0].strip()), 'ceilometer': _ceilometer_client(region[0].strip())} for region in config.items('regions')
+    }
 
     # local_networks is the list of addresses at the local site that will be accounted
     local_networks = _load_networks_from_file(config.get('settings','local-networks'))
@@ -255,7 +278,7 @@ def accounting(queue):
     # this allows an IP address to move between tenants during a buffer_flush_interval
     # without the wrong tenant being billed for part of the traffic (the interval will instead
     # be discarded)
-    old_ip_ownership = _neutron_ip_list(neutron_clients)
+    old_ip_ownership = _neutron_ip_list(clients)
 
     empty_totals_entry = {
         'inbound': {k:0 for k in classified_networks.keys()+[unclassifiable_network]},
@@ -324,7 +347,7 @@ def accounting(queue):
             _debug("sending ceilometer data for %i local IPs" % len(totals))
 
             # re-request the mapping of IP addresses to tenants from OpenStack
-            new_ip_ownership = _neutron_ip_list(neutron_clients)
+            new_ip_ownership = _neutron_ip_list(clients)
 
             # addresses where the owner tenant is no longer the same as the beginning
             # of this interval are removed from the totals to be submitted
@@ -347,12 +370,13 @@ def accounting(queue):
                         if traffic[direction][billing] > 0:
 
                             # XXX ceilometer submission will happen here
-                            _debug("ceilometer record - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s\n" % {                                'octets': traffic[direction][billing],
+                            _debug("ceilometer record - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s\n" % {                                'octets': traffic[direction][billing],
                                 'address': address_string,
                                 'id': new_ip_ownership[address_string]['id'],
                                 'tenant_id': new_ip_ownership[address_string]['tenant_id'],
                                 'direction': direction,
-                                'billing': billing
+                                'billing': billing,
+                                'region': new_ip_ownership[address_string]['region'],
                             })
 
                             # c = ceilometerclient.client.get_client('2', os_username=... os_password=... os_tenant_name=... os_region_name=... os_auth_url=...)
