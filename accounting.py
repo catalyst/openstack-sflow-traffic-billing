@@ -388,7 +388,7 @@ def accounting(queue):
                                 counter_volume=traffic[direction][billing],
                                 project_id=new_ip_ownership[address_string]['tenant_id'],
                                 resource_id=new_ip_ownership[address_string]['id'],
-                                timestamp=datetime.utcnow().isoformat(),
+                                timestamp=datetime.datetime.utcnow().isoformat(),
                                 resource_metadata={}
                             )
 
