@@ -14,6 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
+
 """
 Use sFlow flow records to classify billable OpenStack traffic and submit this
 to ceilometer.
