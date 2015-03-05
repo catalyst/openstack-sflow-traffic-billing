@@ -4,7 +4,9 @@
 Use sFlow flow records to classify billable OpenStack traffic and submit this
 to ceilometer.
 
-Michael Fincham <michael.fincham@catalyst.net.nz>
+Michael Fincham <michael.fincham@catalyst.net.nz>.
+
+This file is licensed under the GNU General Public License version 3.
 """
 
 import ConfigParser
@@ -342,7 +344,7 @@ def accounting(queue):
                 # represents then increment the totals with that amount (in octets)
                 totals[local_address][direction][billing] += (flow['frame_length'] - flow['stripped'] - _sum_header_lengths(flow)) * sample['sampling_rate']
 
-        if time.time() - timestamp >= buffer_flush_interval:
+        if time.time() - timestamp >= buffer_flush_interval and len(totals) > 0:
             start_time = time.time()
             _debug("sending ceilometer data for %i local IPs" % len(totals))
 
