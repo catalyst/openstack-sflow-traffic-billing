@@ -204,7 +204,7 @@ def _neutron_router_ip_list(clients):
                 # generate an ip_list compatible with the floating IP list, except here the
                 # id refers to the router itself rather than an IP address object
                 ip_list.update({
-                    ip: {'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
+                    ip: {'region': region, 'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
                 })
 
     _debug("loaded %i OpenStack router IPs" % len(ip_list.keys()))
