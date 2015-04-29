@@ -15,6 +15,7 @@ import datetime
 import ipaddr
 import multiprocessing
 import pprint
+import sqlite3
 import sys
 import time
 
@@ -27,8 +28,8 @@ import logging
 logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
 
 from scapy.all import *
-import neutronclient.v2_0.client
 import ceilometerclient.client
+import neutronclient.v2_0.client
 
 import sflow
 
@@ -255,11 +256,28 @@ def accounting(queue):
 
     Records sent to ceilometer will be of the form:
 
-    78000 octets for IP 103.254.157.46 (id=f53d0048-8323-4982-8198-59eeacd090e1, tenant_id=74f66db8975d4895a94060d27b1ff441) to traffic.inbound.international
+    78000 octets for IP 192.0.2.1 (id=906116c9-2caf-4360-b567-f4822e861bea, tenant_id=5ab78936f80a827b09dc077b372d4514) to traffic.inbound.international
     """
 
     config = ConfigParser.ConfigParser(allow_no_value=True)
     config.read('accounting.cfg')
+
+    # samples that cannot be submitted immediately to ceilometer go in to the queue
+    local_queue_conn = sqlite3.connect(config.get('setting', 'local-queue'))
+    with local_queue_conn.cursor() as cursor:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS `queue` (
+                `octets`    INTEGER NOT NULL,
+                `address`   TEXT NOT NULL,
+                `object_id` TEXT NOT NULL,
+                `tenant_id` TEXT NOT NULL,
+                `direction` TEXT NOT NULL,
+                `billing`   TEXT NOT NULL,
+                `region`    TEXT NOT NULL,
+                `created`   INTEGER NOT NULL,
+                `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
+            );
+        """)
 
     # the number of seconds between submissions to ceilometer
     buffer_flush_interval = int(config.get('settings','buffer-flush-interval'))

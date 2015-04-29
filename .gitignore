@@ -4,6 +4,7 @@ compressed
 # Local configuration
 networks/
 accounting.cfg
+queue.sqlite3
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
