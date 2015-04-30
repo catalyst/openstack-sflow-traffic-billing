@@ -433,13 +433,15 @@ def accounting(queue):
                                 _debug("ceilometer submit failed, putting in database instead")
                                 local_queue_cursor.execute(
                                     "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, now, None);",
-                                    traffic[direction][billing],
-                                    address_string,
-                                    new_ip_ownership[address_string]['id'],
-                                    new_ip_ownership[address_string]['tenant_id'],
-                                    direction,
-                                    billing,
-                                    new_ip_ownership[address_string]['region'],
+                                    (
+                                        traffic[direction][billing],
+                                        address_string,
+                                        new_ip_ownership[address_string]['id'],
+                                        new_ip_ownership[address_string]['tenant_id'],
+                                        direction,
+                                        billing,
+                                        new_ip_ownership[address_string]['region'],
+                                    ),
                                 )
 
                 local_queue_conn.commit()
