@@ -293,8 +293,7 @@ def accounting(queue):
             `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
         );
     """)
-    cursor.commit()
-    cusror.close()
+    local_queue_conn.commit()
 
     # the number of seconds between submissions to ceilometer
     buffer_flush_interval = int(config.get('settings','buffer-flush-interval'))
