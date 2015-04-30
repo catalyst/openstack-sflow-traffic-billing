@@ -130,7 +130,7 @@ def _neutron_client(region):
             insecure = os.getenv('OS_INSECURE'),
         )
     except:
-        raise("Unable to create neutron client - is your environment set correctly?")
+        raise Exception("Unable to create neutron client - is your environment set correctly?")
 
 def _ceilometer_client(region):
     """
@@ -148,7 +148,7 @@ def _ceilometer_client(region):
             insecure = os.getenv('OS_INSECURE'),
         )
     except:
-        raise("Unable to create ceilometer client - is your environment set correctly?")
+        raise Exception("Unable to create ceilometer client - is your environment set correctly?")
 
 def _neutron_floating_ip_list(clients):
     """
