@@ -459,7 +459,7 @@ def accounting(queue):
                             counter_name='traffic.%s.%s' % (row[4], row[5]),
                             counter_type='delta',
                             counter_unit='byte',
-                            counter_volume=row[0]
+                            counter_volume=row[0],
                             project_id=row[3],
                             resource_id=row[2],
                             timestamp=row[7],
