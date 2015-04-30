@@ -279,8 +279,8 @@ def accounting(queue):
 
     # samples that cannot be submitted immediately to ceilometer go in to the queue
     local_queue_conn = sqlite3.connect(config.get('settings', 'local-queue'))
-    cursor = local_queue_conn.cursor()
-    cursor.execute("""
+    local_queue_cursor = local_queue_conn.cursor()
+    local_queue_cursor.execute("""
         CREATE TABLE IF NOT EXISTS `queue` (
             `octets`    INTEGER NOT NULL,
             `address`   TEXT NOT NULL,
@@ -416,17 +416,33 @@ def accounting(queue):
                                 'region': new_ip_ownership[address_string]['region'],
                             })
 
-                            clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
-                                source='Traffic accounting',
-                                counter_name='traffic.%s.%s' % (direction, billing),
-                                counter_type='delta',
-                                counter_unit='byte',
-                                counter_volume=traffic[direction][billing],
-                                project_id=new_ip_ownership[address_string]['tenant_id'],
-                                resource_id=new_ip_ownership[address_string]['id'],
-                                timestamp=datetime.datetime.utcnow().isoformat(),
-                                resource_metadata={}
-                            )
+
+                            try:
+                                clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
+                                    source='Traffic accounting',
+                                    counter_name='traffic.%s.%s' % (direction, billing),
+                                    counter_type='delta',
+                                    counter_unit='byte',
+                                    counter_volume=traffic[direction][billing],
+                                    project_id=new_ip_ownership[address_string]['tenant_id'],
+                                    resource_id=new_ip_ownership[address_string]['id'],
+                                    timestamp=datetime.datetime.utcnow().isoformat(),
+                                    resource_metadata={}
+                                )
+                            except:
+                                _debug("ceilometer submit failed, putting in database instead")
+                                local_queue_cursor.execute(
+                                    "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, now, None);",
+                                    traffic[direction][billing],
+                                    address_string,
+                                    new_ip_ownership[address_string]['id'],
+                                    new_ip_ownership[address_string]['tenant_id'],
+                                    direction,
+                                    billing,
+                                    new_ip_ownership[address_string]['region'],
+                                })
+
+                local_queue_conn.commit()
 
 
             _debug("ceilometer send complete, took %f seconds" % (time.time() - start_time))
