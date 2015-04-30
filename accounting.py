@@ -393,6 +393,7 @@ def accounting(queue):
                     totals.pop(address, None)
 
             old_ip_ownership = new_ip_ownership
+            ceilometer_is_working = True # optimistic
 
             for address, traffic in totals.iteritems():
                 address_string = str(address)
@@ -401,7 +402,6 @@ def accounting(queue):
                     _debug("%s not a tenant or router IP, ignoring" % address)
                     continue
 
-                ceilometer_is_working = True # optimistic
 
                 for direction in ('inbound', 'outbound'):
                     for billing in classified_networks.keys()+[unclassifiable_network]:
@@ -417,7 +417,6 @@ def accounting(queue):
                                 'billing': billing,
                                 'region': new_ip_ownership[address_string]['region'],
                             })
-
 
                             try:
                                 if ceilometer_is_working:
@@ -450,9 +449,7 @@ def accounting(queue):
                                     ),
                                 )
 
-                local_queue_conn.commit()
-
-
+            local_queue_conn.commit()
             _debug("ceilometer send complete, took %f seconds" % (time.time() - start_time))
             _debug("queue is now %i entries long" % queue.qsize())
 
