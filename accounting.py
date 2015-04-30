@@ -432,7 +432,7 @@ def accounting(queue):
                             except:
                                 _debug("ceilometer submit failed, putting in database instead")
                                 local_queue_cursor.execute(
-                                    "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, 'now', None);",
+                                    "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, 'now', null);",
                                     (
                                         traffic[direction][billing],
                                         address_string,
