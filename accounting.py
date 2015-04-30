@@ -408,7 +408,7 @@ def accounting(queue):
                         if traffic[direction][billing] > 0:
 
                             # XXX ceilometer submission will happen here
-                            _debug("ceilometer record - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s\n" % {
+                            _debug("ceilometer record submission - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s" % {
                                 'octets': traffic[direction][billing],
                                 'address': address_string,
                                 'id': new_ip_ownership[address_string]['id'],
@@ -437,7 +437,7 @@ def accounting(queue):
                                 ceilometer_is_working = False
                                 _debug("ceilometer submit failed, putting in database instead")
                                 local_queue_cursor.execute(
-                                    "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, 'now', null);",
+                                    "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, datetime('now'), null);",
                                     (
                                         traffic[direction][billing],
                                         address_string,
