@@ -449,6 +449,30 @@ def accounting(queue):
                                     ),
                                 )
 
+            # try and cut down the number of queued-on-disk items waiting to go to ceilometer
+            if ceilometer_is_working:
+                for row in local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;'):                ):
+                    try:
+                        _debug("unspooling a thing from the db in to ceilometer...")
+                        clients[row[6]]['ceilometer'].samples.create(
+                            source='Traffic accounting',
+                            counter_name='traffic.%s.%s' % (row[4], row[5]),
+                            counter_type='delta',
+                            counter_unit='byte',
+                            counter_volume=row[0]
+                            project_id=row[3],
+                            resource_id=row[2],
+                            timestamp=row[7],
+                            resource_metadata={}
+                        )
+                    except:
+                        _debug("ceilometer is still broken, will get this record next time around")
+                        break
+                    else:
+                        _debug("unspooled OK, removing from queue")
+                        local_queue_cursor.execute('DELETE FROM queue WHERE id=?',(row[8],))
+
+
             local_queue_conn.commit()
             _debug("ceilometer send complete, took %f seconds" % (time.time() - start_time))
             _debug("queue is now %i entries long" % queue.qsize())
