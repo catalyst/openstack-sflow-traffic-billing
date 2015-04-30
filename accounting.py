@@ -401,6 +401,8 @@ def accounting(queue):
                     _debug("%s not a tenant or router IP, ignoring" % address)
                     continue
 
+                ceilometer_is_working = True # optimistic
+
                 for direction in ('inbound', 'outbound'):
                     for billing in classified_networks.keys()+[unclassifiable_network]:
                         if traffic[direction][billing] > 0:
@@ -418,18 +420,22 @@ def accounting(queue):
 
 
                             try:
-                                clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
-                                    source='Traffic accounting',
-                                    counter_name='traffic.%s.%s' % (direction, billing),
-                                    counter_type='delta',
-                                    counter_unit='byte',
-                                    counter_volume=traffic[direction][billing],
-                                    project_id=new_ip_ownership[address_string]['tenant_id'],
-                                    resource_id=new_ip_ownership[address_string]['id'],
-                                    timestamp=datetime.datetime.utcnow().isoformat(),
-                                    resource_metadata={}
-                                )
+                                if ceilometer_is_working:
+                                    clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
+                                        source='Traffic accounting',
+                                        counter_name='traffic.%s.%s' % (direction, billing),
+                                        counter_type='delta',
+                                        counter_unit='byte',
+                                        counter_volume=traffic[direction][billing],
+                                        project_id=new_ip_ownership[address_string]['tenant_id'],
+                                        resource_id=new_ip_ownership[address_string]['id'],
+                                        timestamp=datetime.datetime.utcnow().isoformat(),
+                                        resource_metadata={}
+                                    )
+                                else:
+                                    raise("Ceilometer is not working.")
                             except:
+                                ceilometer_is_working = False
                                 _debug("ceilometer submit failed, putting in database instead")
                                 local_queue_cursor.execute(
                                     "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, 'now', null);",
