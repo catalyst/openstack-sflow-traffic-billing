@@ -451,7 +451,7 @@ def accounting(queue):
 
             # try and cut down the number of queued-on-disk items waiting to go to ceilometer
             if ceilometer_is_working:
-                for row in local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;'):                ):
+                for row in local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;'):
                     try:
                         _debug("unspooling a thing from the db in to ceilometer...")
                         clients[row[6]]['ceilometer'].samples.create(
