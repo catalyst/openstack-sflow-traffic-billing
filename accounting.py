@@ -279,20 +279,22 @@ def accounting(queue):
 
     # samples that cannot be submitted immediately to ceilometer go in to the queue
     local_queue_conn = sqlite3.connect(config.get('settings', 'local-queue'))
-    with local_queue_conn.cursor() as cursor:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS `queue` (
-                `octets`    INTEGER NOT NULL,
-                `address`   TEXT NOT NULL,
-                `object_id` TEXT NOT NULL,
-                `tenant_id` TEXT NOT NULL,
-                `direction` TEXT NOT NULL,
-                `billing`   TEXT NOT NULL,
-                `region`    TEXT NOT NULL,
-                `created`   INTEGER NOT NULL,
-                `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
-            );
-        """)
+    cursor = local_queue_conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS `queue` (
+            `octets`    INTEGER NOT NULL,
+            `address`   TEXT NOT NULL,
+            `object_id` TEXT NOT NULL,
+            `tenant_id` TEXT NOT NULL,
+            `direction` TEXT NOT NULL,
+            `billing`   TEXT NOT NULL,
+            `region`    TEXT NOT NULL,
+            `created`   INTEGER NOT NULL,
+            `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
+        );
+    """)
+    cursor.commit()
+    cusror.close()
 
     # the number of seconds between submissions to ceilometer
     buffer_flush_interval = int(config.get('settings','buffer-flush-interval'))
