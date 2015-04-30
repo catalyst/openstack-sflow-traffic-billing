@@ -440,7 +440,7 @@ def accounting(queue):
                                     direction,
                                     billing,
                                     new_ip_ownership[address_string]['region'],
-                                })
+                                )
 
                 local_queue_conn.commit()
 
