@@ -278,7 +278,7 @@ def accounting(queue):
     config.read('accounting.cfg')
 
     # samples that cannot be submitted immediately to ceilometer go in to the queue
-    local_queue_conn = sqlite3.connect(config.get('setting', 'local-queue'))
+    local_queue_conn = sqlite3.connect(config.get('settings', 'local-queue'))
     with local_queue_conn.cursor() as cursor:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS `queue` (
