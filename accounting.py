@@ -120,29 +120,35 @@ def _neutron_client(region):
     be provided by an OpenStack RC file).
     """
 
-    return neutronclient.v2_0.client.Client(
-        username = os.getenv('OS_USERNAME'),
-        password = os.getenv('OS_PASSWORD'),
-        tenant_name = os.getenv('OS_TENANT_NAME'),
-        auth_url = os.getenv('OS_AUTH_URL'),
-        region_name = region,
-        insecure = os.getenv('OS_INSECURE'),
-    )
+    try:
+        return neutronclient.v2_0.client.Client(
+            username = os.getenv('OS_USERNAME'),
+            password = os.getenv('OS_PASSWORD'),
+            tenant_name = os.getenv('OS_TENANT_NAME'),
+            auth_url = os.getenv('OS_AUTH_URL'),
+            region_name = region,
+            insecure = os.getenv('OS_INSECURE'),
+        )
+    except:
+        raise("Unable to create neutron client - is your environment set correctly?")
 
 def _ceilometer_client(region):
     """
     Returns an instance of the OpenStack Ceilometer client for the given region.
     """
 
-    return ceilometerclient.client.get_client(
-        '2',
-        os_username = os.getenv('OS_USERNAME'),
-        os_password = os.getenv('OS_PASSWORD'),
-        os_tenant_name = os.getenv('OS_TENANT_NAME'),
-        os_auth_url = os.getenv('OS_AUTH_URL'),
-        os_region_name = region,
-        insecure = os.getenv('OS_INSECURE'),
-    )
+    try:
+        return ceilometerclient.client.get_client(
+            '2',
+            os_username = os.getenv('OS_USERNAME'),
+            os_password = os.getenv('OS_PASSWORD'),
+            os_tenant_name = os.getenv('OS_TENANT_NAME'),
+            os_auth_url = os.getenv('OS_AUTH_URL'),
+            os_region_name = region,
+            insecure = os.getenv('OS_INSECURE'),
+        )
+    except:
+        raise("Unable to create ceilometer client - is your environment set correctly?")
 
 def _neutron_floating_ip_list(clients):
     """
