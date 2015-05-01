@@ -24,6 +24,7 @@ Michael Fincham <michael.fincham@catalyst.net.nz>.
 This file is licensed under the GNU General Public License version 3.
 """
 
+import binascii
 import ConfigParser
 import copy
 import datetime
