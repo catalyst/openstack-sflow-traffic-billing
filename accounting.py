@@ -372,7 +372,7 @@ def accounting(queue):
             # every "flow" corresponds to a truncated packet pulled off the wire
             # on one of the agents (e.g. routers)
             for flow in sample['flows']:
-                flow_frame = Frame(flow)
+                flow_frame = Frame(flow['payload'])
 
                 if not flow_frame.has_ip: # ignore packets without an IP header as
                     continue              # they won't have a source or destination address
