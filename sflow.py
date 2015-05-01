@@ -21,8 +21,9 @@ Python sFlow collector.
 Michael Fincham <michael.fincham@catalyst.net.nz>
 """
 
-import pickle
+import binascii
 import socket
+import struct
 import time
 import xdrlib
 
