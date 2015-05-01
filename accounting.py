@@ -33,6 +33,7 @@ import logging
 import multiprocessing
 import os
 import pprint
+import socket
 import sqlite3
 import struct
 import sys
