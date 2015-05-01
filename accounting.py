@@ -28,6 +28,7 @@ import ConfigParser
 import copy
 import datetime
 import ipaddr
+import logging
 import multiprocessing
 import pprint
 import sqlite3
@@ -37,17 +38,10 @@ import time
 # XXX remove when debugging is complete
 import pdb
 
-# scapy sometimes throws uninteresting warnings when processing the truncated
-# packets provided by sFlow, they are not important in this context
-import logging
-logging.getLogger("scapy.runtime").setLevel(logging.ERROR)
-
-from scapy.all import *
 import ceilometerclient.client
 import neutronclient.v2_0.client
 
 import sflow
-
 
 class ForkedPdb(pdb.Pdb):
     """
@@ -64,47 +58,91 @@ class ForkedPdb(pdb.Pdb):
         finally:
             sys.stdin = _stdin
 
-def _debug(message, *args, **kwargs):
-    """
-    Write debugging message to stdout with a timestamp.
 
-    XXX To be removed and replaced with logging module.
-    """
+class Frame(object):
 
-    sys.stderr.write("%s debug: %s\n" % (time.strftime('%x %X'), message.format(*args, **kwargs)))
+    ETHERTYPES = {
+        'IPv4': 0x0800,
+        '802.1Q': 0x8100,
+        'IPv6': 0x86DD,
+    }
 
-def _sum_header_lengths(flow):
+    def __init__(self, packet):
+        """
+        Given the raw bytes of an Ethernet II frame extract some useful parameters.
+        """
+
+        if len(packet) < 14: # packet is too short to have an Ethernet header...
+            raise Exception("Packet too short (under 14 octets)")
+
+        # decode ethernet frame header
+        self.ethernet_header = struct.unpack("!6s6sH", packet[0:14])
+        self.destination_mac = binascii.hexlify(self.ethernet_header[0])
+        self.source_mac = binascii.hexlify(self.ethernet_header[1])
+        self.ethertype = self.ethernet_header[2]
+
+        # find all 802.1q headers, if any
+        if self.ethertype == self.ETHERTYPES['802.1Q']:
+            self.vlans = []
+            while True:
+                self.payload_offset = 12 + len(self.vlans) * 4
+                tpid, tci = struct.unpack("!HH", packet[self.payload_offset:self.payload_offset+4])
+                if tpid == self.ETHERTYPES['802.1Q']:
+                    self.vlans.append(tci & 0x0fff)
+                else:
+                    self.ethertype = tpid
+                    break
+        else:
+            self.payload_offset = 14
+
+        # decode some of the IPv4 and IPv6 fields important for accting
+        if self.ethertype == self.ETHERTYPES['IPv4']:
+            self.ipv4_header = struct.unpack("!BBHHHBBH4s4s", packet[self.payload_offset:self.payload_offset+20])
+            self.ipv4_total_length = self.ipv4_header[2]
+            self.ipv4_protocol = self.ipv4_header[6]
+            self.ipv4_source_ip = socket.inet_ntoa(self.ipv4_header[8])
+            self.ipv4_destination_ip = socket.inet_ntoa(self.ipv4_header[9])
+
+            self.has_ip = True
+            self.ip_version = 4
+            self.total_length = self.ipv4_total_length
+            self.source_ip = self.ipv4_source_ip
+            self.destination_ip = self.ipv4_destination_ip
+
+        elif self.ethertype == self.ETHERTYPES['IPv6']:
+            self.ipv6_header = struct.unpack("!4sHBB16s16s", packet[self.payload_offset:self.payload_offset+40])
+            self.ipv6_source_ip = socket.inet_ntop(socket.AF_INET6, self.ipv6_header[4])
+            self.ipv6_destination_ip = socket.inet_ntop(socket.AF_INET6, self.ipv6_header[5])
+            self.ipv6_payload_length = self.ipv6_header[1]
+            self.ipv6_next_header = self.ipv6_header[2]
+
+            self.has_ip = True
+            self.ip_version = 6
+            self.total_length = self.ipv6_payload_length + 40
+            self.source_ip = self.ipv6_source_ip
+            self.destination_ip = self.ipv6_destination_ip
+        else:
+            self.has_ip = False
+
+    def __repr__(self):
+        return '<Frame ethertype=%s has_ip=%s source_address=%s destination_address=%s length=%s>' % (
+            self.ETHERTYPES.get(self.ethertype, hex(self.ethertype)),
+            repr(self.has_ip),
+
+        )
+
+def _sum_header_lengths(frame):
     """
-    Return the sum of the byte lengths of the contiguous Ethernet and Dot1Q
-    headers in a flow sample.
+    Return the sum of the octet lengths of the Ethernet and Dot1Q headers in a
+    flow frame.
     """
 
     HEADER_LENGTHS = {
-        'Ether': 14, # bytes
-        'Dot1Q': 4, # bytes
+        'Ether': 14, # octets
+        'Dot1Q': 4, # octets
     }
 
-    length = 0
-
-    for layer in flow['layers']:
-        if layer['decoded_as'] not in HEADER_LENGTHS: # Only count the contiguous
-            return length                             # Ether and Dot1Q headers at the
-                                                      # beginning of the sample
-
-        length += HEADER_LENGTHS[layer['decoded_as']]
-
-    return length
-
-def _find_first_layer(layers, layer_decoded_as):
-    """
-    Return the first layer of a certain type from a set of layers.
-    """
-
-    for layer in layers:
-        if layer['decoded_as'] == layer_decoded_as:
-            return layer
-
-    return None
+    return len(frame.vlans) * HEADER_LENGTHS['Dot1Q'] + HEADER_LENGTHS['Ether']
 
 def _address_in_network_list(address, networks):
     """
@@ -176,7 +214,7 @@ def _neutron_floating_ip_list(clients):
             ip['floating_ip_address']: {'region': region, 'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in components['neutron'].list_floatingips()['floatingips']
         })
 
-    _debug("loaded %i OpenStack floating IPs" % len(ip_list.keys()))
+    logging.info("loaded %i OpenStack floating IPs" % len(ip_list.keys()))
     return ip_list
 
 def _neutron_router_ip_list(clients):
@@ -229,7 +267,7 @@ def _neutron_router_ip_list(clients):
                     ip: {'region': region, 'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
                 })
 
-    _debug("loaded %i OpenStack router IPs" % len(ip_list.keys()))
+    logging.info("loaded %i OpenStack router IPs" % len(ip_list.keys()))
 
     return ip_list
 
@@ -260,7 +298,7 @@ def _load_networks_from_file(filename):
             except:
                 continue
 
-    _debug("loaded %i networks from %s" % (len(networks), filename))
+    logging.info("loaded %i networks from %s" % (len(networks), filename))
 
     return networks
 
@@ -305,9 +343,12 @@ def accounting(queue):
     buffer_flush_interval = int(config.get('settings','buffer-flush-interval'))
 
     # connect to neutron and ceilometer for all regions where accting is desired
-    clients = {
-        region[0].strip(): {'neutron': _neutron_client(region[0].strip()), 'ceilometer': _ceilometer_client(region[0].strip())} for region in config.items('regions')
-    }
+    try:
+        clients = {
+            region[0].strip(): {'neutron': _neutron_client(region[0].strip()), 'ceilometer': _ceilometer_client(region[0].strip())} for region in config.items('regions')
+        }
+    except:
+        _fatal()
 
     # local_networks is the list of addresses at the local site that will be accounted
     local_networks = _load_networks_from_file(config.get('settings','local-networks'))
@@ -340,25 +381,22 @@ def accounting(queue):
             # every "flow" corresponds to a truncated packet pulled off the wire
             # on one of the agents (e.g. routers)
             for flow in sample['flows']:
-                ip_layer = _find_first_layer(flow['layers'], 'IP')
+                flow_frame = Frame(flow)
 
-                if ip_layer is None: # ignore packets without an IP header as
-                    continue         # they won't have a source or destination address
-
-                ip_layer['src'] = ipaddr.IPAddress(ip_layer['src'])
-                ip_layer['dst'] = ipaddr.IPAddress(ip_layer['dst'])
+                if not flow_frame.has_ip: # ignore packets without an IP header as
+                    continue              # they won't have a source or destination address
 
                 # determine whether or not the packet was sampled inbound or outbound
                 # on the agent interface. agent interfaces should face transit providers,
                 # so this direction is also relative to the AS where this runs.
                 if sample['input'] == sflow.FlowCollector.SFLOW_INTERFACE_INTERNAL:
                     direction = 'outbound'
-                    local_address = ip_layer['src']
-                    remote_address = ip_layer['dst']
+                    local_address = flow_frame.source_ip
+                    remote_address = flow_frame.destination_ip
                 else:
                     direction = 'inbound'
-                    local_address = ip_layer['dst']
-                    remote_address = ip_layer['src']
+                    local_address = flow_frame.destination_ip
+                    remote_address = flow_frame.source_ip
 
                 # ignore addresses not in the "local-networks" set, this will
                 # ignore transit packets
@@ -386,7 +424,7 @@ def accounting(queue):
 
         if time.time() - timestamp >= buffer_flush_interval and len(totals) > 0:
             start_time = time.time()
-            _debug("sending ceilometer data for %i local IPs" % len(totals))
+            logging.info("sending ceilometer data for %i local IPs" % len(totals))
 
             # re-request the mapping of IP addresses to tenants from OpenStack
             new_ip_ownership = _neutron_ip_list(clients)
@@ -395,7 +433,7 @@ def accounting(queue):
             # of this interval are removed from the totals to be submitted
             for address, details in new_ip_ownership.iteritems():
                 if address in old_ip_ownership and old_ip_ownership[address]['tenant_id'] != details['tenant_id']:
-                    _debug("ownership of %s changed during period" % address)
+                    logging.info("ownership of %s changed during period" % address)
                     totals.pop(address, None)
 
             old_ip_ownership = new_ip_ownership
@@ -405,7 +443,7 @@ def accounting(queue):
                 address_string = str(address)
 
                 if address_string not in new_ip_ownership:
-                    _debug("%s not a tenant or router IP, ignoring" % address)
+                    logging.info("%s not a tenant or router IP, ignoring" % address)
                     continue
 
 
@@ -414,7 +452,7 @@ def accounting(queue):
                         if traffic[direction][billing] > 0:
 
                             # XXX ceilometer submission will happen here
-                            _debug("ceilometer record submission - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s" % {
+                            logging.info("ceilometer record submission - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s" % {
                                 'octets': traffic[direction][billing],
                                 'address': address_string,
                                 'id': new_ip_ownership[address_string]['id'],
@@ -441,7 +479,7 @@ def accounting(queue):
                                     raise("Ceilometer is not working.")
                             except:
                                 ceilometer_is_working = False
-                                _debug("ceilometer submit failed, putting in database instead")
+                                logging.info("ceilometer submit failed, putting in database instead")
                                 local_queue_cursor.execute(
                                     "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, datetime('now'), null);",
                                     (
@@ -459,7 +497,7 @@ def accounting(queue):
             if ceilometer_is_working:
                 for row in local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall():
                     try:
-                        _debug("unspooling a thing from the db in to ceilometer...")
+                        logging.info("unspooling a thing from the db in to ceilometer...")
                         clients[row[6]]['ceilometer'].samples.create(
                             source='Traffic accounting',
                             counter_name='traffic.%s.%s' % (row[4], row[5]),
@@ -472,24 +510,24 @@ def accounting(queue):
                             resource_metadata={}
                         )
                     except:
-                        _debug("ceilometer is still broken, will get this record next time around")
+                        logging.info("ceilometer is still broken, will get this record next time around")
                         break
                     else:
-                        _debug("unspooled OK, removing from queue")
+                        logging.info("unspooled OK, removing from queue")
                         local_queue_cursor.execute('DELETE FROM queue WHERE id=?',(row[8],))
 
 
             local_queue_conn.commit()
-            _debug("ceilometer send complete, took %f seconds" % (time.time() - start_time))
-            _debug("queue is now %i entries long" % queue.qsize())
+            logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
+            logging.info("queue is now %i entries long" % queue.qsize())
 
             totals = {}
             timestamp = int(time.time())
 
 
 if __name__ == '__main__':
-
-    _debug("starting sFlow and accounting processes...")
+    logging.basicConfig(level=logging.DEBUG)
+    logging.info("starting sFlow and accounting processes...")
 
     accounting_packet_queue = multiprocessing.Queue()
     accounting_process = multiprocessing.Process(
