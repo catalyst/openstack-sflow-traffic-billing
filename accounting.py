@@ -30,6 +30,7 @@ import datetime
 import ipaddr
 import logging
 import multiprocessing
+import os
 import pprint
 import sqlite3
 import sys
@@ -348,7 +349,8 @@ def accounting(queue):
             region[0].strip(): {'neutron': _neutron_client(region[0].strip()), 'ceilometer': _ceilometer_client(region[0].strip())} for region in config.items('regions')
         }
     except:
-        _fatal()
+        logging.error("unable to create any OpenStack client connections - is your auth environment right?")
+        sys.exit(2)
 
     # local_networks is the list of addresses at the local site that will be accounted
     local_networks = _load_networks_from_file(config.get('settings','local-networks'))
@@ -527,6 +529,9 @@ def accounting(queue):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
+    logging.getLogger("neutronclient.client").setLevel(logging.ERROR)
+    logging.getLogger("ceilometerclient.client").setLevel(logging.ERROR)
+
     logging.info("starting sFlow and accounting processes...")
 
     accounting_packet_queue = multiprocessing.Queue()
