@@ -33,6 +33,7 @@ import multiprocessing
 import os
 import pprint
 import sqlite3
+import struct
 import sys
 import time
 
