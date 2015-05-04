@@ -42,6 +42,7 @@ import time
 # XXX remove when debugging is complete
 import pdb
 
+import ipaddr
 import ceilometerclient.client
 import neutronclient.v2_0.client
 
@@ -110,8 +111,8 @@ class Frame(object):
             self.has_ip = True
             self.ip_version = 4
             self.total_length = self.ipv4_total_length
-            self.source_ip = self.ipv4_source_ip
-            self.destination_ip = self.ipv4_destination_ip
+            self.source_ip = ipaddr.IPAddress(self.ipv4_source_ip)
+            self.destination_ip = ipaddr.IPAddress(self.ipv4_destination_ip)
 
         elif self.ethertype == self.ETHERTYPES['IPv6']:
             self.ipv6_header = struct.unpack("!4sHBB16s16s", packet[self.payload_offset:self.payload_offset+40])
@@ -123,8 +124,8 @@ class Frame(object):
             self.has_ip = True
             self.ip_version = 6
             self.total_length = self.ipv6_payload_length + 40
-            self.source_ip = self.ipv6_source_ip
-            self.destination_ip = self.ipv6_destination_ip
+            self.source_ip = ipaddr.IPAddress(self.ipv6_source_ip)
+            self.destination_ip = ipaddr.IPAddress(elf.ipv6_destination_ip)
         else:
             self.has_ip = False
 
