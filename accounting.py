@@ -497,7 +497,7 @@ class AccountingCollector(object):
                                         raise Exception("Ceilometer is not working.")
                                 except:
                                     ceilometer_is_working = False
-                                    logging.info("ceilometer submit failed, putting in database instead")
+                                    logging.info("ceilometer is broken, putting in database instead")
                                     ceilometer_record.update({'region': new_ip_ownership[address_string]['region']})
                                     self.local_queue_cursor.execute(
                                         "INSERT INTO queue VALUES(:counter_name, :counter_volume, :project_id, :resource_id, :region, datetime('now'), null);",
@@ -505,8 +505,11 @@ class AccountingCollector(object):
                                     )
 
                 # try and cut down the number of queued-on-disk items waiting to go to ceilometer
-                if ceilometer_is_working:
-                    for row in self.local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall():
+                while ceilometer_is_working and time.time() - start_time < 300:
+                    database_samples = self.local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall()
+                    if len(database_samples) == 0:
+                        break
+                    for row in database_samples:
                         try:
                             logging.info("unspooling a thing from the db in to ceilometer...")
                             self.clients[row[4]]['ceilometer'].samples.create(
@@ -537,6 +540,7 @@ class AccountingCollector(object):
 
 def accounting(queue):
     collector = AccountingCollector(queue)
+    logging.info("starting collector...")
     collector.process_queue()
 
 if __name__ == '__main__':
