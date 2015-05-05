@@ -125,7 +125,7 @@ class Frame(object):
             self.ip_version = 6
             self.total_length = self.ipv6_payload_length + 40
             self.source_ip = ipaddr.IPAddress(self.ipv6_source_ip)
-            self.destination_ip = ipaddr.IPAddress(elf.ipv6_destination_ip)
+            self.destination_ip = ipaddr.IPAddress(self.ipv6_destination_ip)
         else:
             self.has_ip = False
 
@@ -147,7 +147,7 @@ def _sum_header_lengths(frame):
         'Dot1Q': 4, # octets
     }
 
-    return len(frame.vlans) * HEADER_LENGTHS['Dot1Q'] + HEADER_LENGTHS['Ether']
+    return len(getattr(frame, 'vlans', [])) * HEADER_LENGTHS['Dot1Q'] + HEADER_LENGTHS['Ether']
 
 def _address_in_network_list(address, networks):
     """
@@ -415,7 +415,7 @@ def accounting(queue):
                 # multiply the original length of the packetby the sampling
                 # rate to produce an estimate of the "real world" traffic it
                 # represents then increment the totals with that amount (in octets)
-                totals[local_address][direction][billing] += (flow['frame_length'] - flow['stripped'] - _sum_header_lengths(flow)) * sample['sampling_rate']
+                totals[local_address][direction][billing] += (flow['frame_length'] - flow['stripped'] - _sum_header_lengths(flow_frame)) * sample['sampling_rate']
 
         if time.time() - timestamp >= buffer_flush_interval and len(totals) > 0:
             start_time = time.time()
@@ -495,7 +495,7 @@ def accounting(queue):
             logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
             logging.info("queue is now %i entries long" % queue.qsize())
 
-            totals = {}
+            # totals = {}
             timestamp = int(time.time())
 
 
