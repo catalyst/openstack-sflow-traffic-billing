@@ -509,9 +509,10 @@ class AccountingCollector(object):
                     database_samples = self.local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall()
                     if len(database_samples) == 0:
                         break
+                    logging.info("attempting to re-submit samples spooled on disk...")
                     for row in database_samples:
                         try:
-                            logging.info("unspooling a thing from the db in to ceilometer...")
+                            logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(row), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
                             self.clients[row[4]]['ceilometer'].samples.create(
                                 source='Traffic accounting',
                                 resource_metadata={},
@@ -524,12 +525,10 @@ class AccountingCollector(object):
                                 timestamp=row[5],
                             )
                         except:
-                            logging.info("ceilometer is still broken, will get this record next time around")
+                            logging.debug("ceilometer is still broken, will get this record next time around")
                             break
                         else:
-                            logging.info("unspooled OK, removing from queue")
                             self.local_queue_cursor.execute('DELETE FROM queue WHERE id=?', (row[6],))
-
 
                 self.local_queue_conn.commit()
                 logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
