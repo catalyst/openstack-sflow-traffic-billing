@@ -180,7 +180,18 @@ def _ceilometer_client(region):
     Returns an instance of the OpenStack Ceilometer client for the given region.
     """
 
-    return None
+    try:
+        return ceilometerclient.client.get_client(
+            '2',
+            os_username = os.getenv('OS_USERNAME'),
+            os_password = os.getenv('OS_PASSWORD'),
+            os_tenant_name = os.getenv('OS_TENANT_NAME'),
+            os_auth_url = os.getenv('OS_AUTH_URL'),
+            os_region_name = region,
+            insecure = os.getenv('OS_INSECURE'),
+        )
+    except:
+        raise Exception("Unable to create ceilometer client - is your environment set correctly?")
 
 def _neutron_floating_ip_list(clients):
     """
@@ -459,7 +470,17 @@ def accounting(queue):
 
                             try:
                                 if ceilometer_is_working:
-                                    pass
+                                    clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
+                                        source='Traffic accounting',
+                                        counter_name='traffic.%s.%s' % (direction, billing),
+                                        counter_type='delta',
+                                        counter_unit='byte',
+                                        counter_volume=traffic[direction][billing],
+                                        project_id=new_ip_ownership[address_string]['tenant_id'],
+                                        resource_id=new_ip_ownership[address_string]['id'],
+                                        timestamp=datetime.datetime.utcnow().isoformat(),
+                                        resource_metadata={}
+                                    )
                                 else:
                                     raise("Ceilometer is not working.")
                             except:
@@ -483,6 +504,17 @@ def accounting(queue):
                 for row in local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall():
                     try:
                         logging.info("unspooling a thing from the db in to ceilometer...")
+                        clients[row[6]]['ceilometer'].samples.create(
+                            source='Traffic accounting',
+                            counter_name='traffic.%s.%s' % (row[4], row[5]),
+                            counter_type='delta',
+                            counter_unit='byte',
+                            counter_volume=row[0],
+                            project_id=row[3],
+                            resource_id=row[2],
+                            timestamp=row[7],
+                            resource_metadata={}
+                        )
                     except:
                         logging.info("ceilometer is still broken, will get this record next time around")
                         break
@@ -495,7 +527,7 @@ def accounting(queue):
             logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
             logging.info("queue is now %i entries long" % queue.qsize())
 
-            # totals = {}
+            totals = {}
             timestamp = int(time.time())
 
 
