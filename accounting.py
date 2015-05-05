@@ -531,9 +531,13 @@ def accounting(queue):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
+
+    # reduce the logging verbosity of some openstack components
     logging.getLogger("neutronclient.client").setLevel(logging.ERROR)
     logging.getLogger("keystoneclient.session").setLevel(logging.ERROR)
+    logging.getLogger("ceilometerclient.common.http").setLevel(logging.ERROR)
     logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
+    logging.getLogger("iso8601.iso8601").setLevel(logging.ERROR)
 
     logging.info("starting sFlow and accounting processes...")
 
