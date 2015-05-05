@@ -26,11 +26,9 @@ import binascii
 import ConfigParser
 import copy
 import datetime
-import ipaddr
 import logging
 import multiprocessing
 import os
-import pprint
 import socket
 import sqlite3
 import struct
@@ -63,6 +61,9 @@ class ForkedPdb(pdb.Pdb):
 
 
 class Frame(object):
+    """
+    Given the raw bytes of an Ethernet II frame extract some useful parameters.
+    """
 
     ETHERTYPES = {
         'IPv4': 0x0800,
@@ -70,11 +71,12 @@ class Frame(object):
         'IPv6': 0x86DD,
     }
 
-    def __init__(self, packet):
-        """
-        Given the raw bytes of an Ethernet II frame extract some useful parameters.
-        """
+    HEADER_LENGTHS = {
+        'Ether': 14, # octets
+        'Dot1Q': 4, # octets
+    }
 
+    def __init__(self, packet):
         if len(packet) < 14: # packet is too short to have an Ethernet header...
             raise Exception("Packet too short (under 14 octets)")
 
@@ -127,407 +129,430 @@ class Frame(object):
         else:
             self.has_ip = False
 
+    def sum_header_lengths(self):
+        """
+        Return the sum of the octet lengths of the Ethernet and Dot1Q headers.
+        """
+
+        return len(getattr(self, 'vlans', [])) * self.HEADER_LENGTHS['Dot1Q'] + self.HEADER_LENGTHS['Ether']
+
+
     def __repr__(self):
         return '<Frame ethertype=%s has_ip=%s source_address=%s destination_address=%s length=%s>' % (
             self.ETHERTYPES.get(self.ethertype, hex(self.ethertype)),
             repr(self.has_ip),
-
+            self.source_ip,
+            self.destination_ip,
+            self.total_length,
         )
 
-def _sum_header_lengths(frame):
-    """
-    Return the sum of the octet lengths of the Ethernet and Dot1Q headers in a
-    flow frame.
-    """
+class AccountingCollector(object):
 
-    HEADER_LENGTHS = {
-        'Ether': 14, # octets
-        'Dot1Q': 4, # octets
-    }
+    @staticmethod
+    def _address_in_network_list(address, networks):
+        """
+        Returns true if address is within any of the networks.
+        """
 
-    return len(getattr(frame, 'vlans', [])) * HEADER_LENGTHS['Dot1Q'] + HEADER_LENGTHS['Ether']
+        return any([address in network for network in networks])
 
-def _address_in_network_list(address, networks):
-    """
-    Returns true if address is within any of the networks.
-    """
+    @staticmethod
+    def _neutron_client(region):
+        """
+        Returns an instance of the OpenStack Neutron client for the given region.
+        Authentication details are taken from the environment (usually these would
+        be provided by an OpenStack RC file).
+        """
 
-    return any([address in network for network in networks])
+        try:
+            return neutronclient.v2_0.client.Client(
+                username = os.getenv('OS_USERNAME'),
+                password = os.getenv('OS_PASSWORD'),
+                tenant_name = os.getenv('OS_TENANT_NAME'),
+                auth_url = os.getenv('OS_AUTH_URL'),
+                region_name = region,
+                insecure = os.getenv('OS_INSECURE'),
+            )
+        except:
+            raise Exception("Unable to create neutron client - is your environment set correctly?")
 
-def _neutron_client(region):
-    """
-    Returns an instance of the OpenStack Neutron client for the given region.
-    Authentication details are taken from the environment (usually these would
-    be provided by an OpenStack RC file).
-    """
+    @staticmethod
+    def _ceilometer_client(region):
+        """
+        Returns an instance of the OpenStack Ceilometer client for the given region.
+        """
 
-    try:
-        return neutronclient.v2_0.client.Client(
-            username = os.getenv('OS_USERNAME'),
-            password = os.getenv('OS_PASSWORD'),
-            tenant_name = os.getenv('OS_TENANT_NAME'),
-            auth_url = os.getenv('OS_AUTH_URL'),
-            region_name = region,
-            insecure = os.getenv('OS_INSECURE'),
-        )
-    except:
-        raise Exception("Unable to create neutron client - is your environment set correctly?")
+        try:
+            return ceilometerclient.client.get_client(
+                '2',
+                os_username = os.getenv('OS_USERNAME'),
+                os_password = os.getenv('OS_PASSWORD'),
+                os_tenant_name = os.getenv('OS_TENANT_NAME'),
+                os_auth_url = os.getenv('OS_AUTH_URL'),
+                os_region_name = region,
+                insecure = os.getenv('OS_INSECURE'),
+            )
+        except:
+            raise Exception("Unable to create ceilometer client - is your environment set correctly?")
 
-def _ceilometer_client(region):
-    """
-    Returns an instance of the OpenStack Ceilometer client for the given region.
-    """
+    def _neutron_floating_ip_list(self):
+        """
+        Return a list of all the floating IPs across a given list of clients along
+        with the associated tenant_id and floating IP address id.
 
-    try:
-        return ceilometerclient.client.get_client(
-            '2',
-            os_username = os.getenv('OS_USERNAME'),
-            os_password = os.getenv('OS_PASSWORD'),
-            os_tenant_name = os.getenv('OS_TENANT_NAME'),
-            os_auth_url = os.getenv('OS_AUTH_URL'),
-            os_region_name = region,
-            insecure = os.getenv('OS_INSECURE'),
-        )
-    except:
-        raise Exception("Unable to create ceilometer client - is your environment set correctly?")
+        >>> clients = [_neutron_client('test-1'), _neutron_client('test-2')]
+        >>> _neutron_floating_ip_list(clients)
+        {u'192.0.2.1': {'id': u'c60bd278-ed5c-4897-9e64-badd2073f96d',
+                             'tenant_id': u'ef3e926be03016dc6756f7ecd82498a2',
+                             'type': 'floating',
+                             'region': 'test-1'},
+         u'192.0.2.2': {'id': u'd8b710eb-efa9-49ff-aa27-f731ad96a63b',
+                             'tenant_id': u'060cca3aa4c2198f8ff3183e99dc2d9f',
+                             'type': 'floating',
+                             'region': 'test-1'}}
+        """
 
-def _neutron_floating_ip_list(clients):
-    """
-    Return a list of all the floating IPs across a given list of clients along
-    with the associated tenant_id and floating IP address id.
+        ip_list = {}
 
-    >>> clients = [_neutron_client('test-1'), _neutron_client('test-2')]
-    >>> _neutron_floating_ip_list(clients)
-    {u'192.0.2.1': {'id': u'c60bd278-ed5c-4897-9e64-badd2073f96d',
-                         'tenant_id': u'ef3e926be03016dc6756f7ecd82498a2',
-                         'type': 'floating',
-                         'region': 'test-1'},
-     u'192.0.2.2': {'id': u'd8b710eb-efa9-49ff-aa27-f731ad96a63b',
-                         'tenant_id': u'060cca3aa4c2198f8ff3183e99dc2d9f',
-                         'type': 'floating',
-                         'region': 'test-1'}}
-    """
+        # collect up the list of floating IPs for each client in the list along with
+        # the tenant they belong to
+        for region, components in self.clients.iteritems():
+            ip_list.update({
+                ip['floating_ip_address']: {'region': region, 'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in components['neutron'].list_floatingips()['floatingips']
+            })
 
-    ip_list = {}
+        logging.info("loaded %i OpenStack floating IPs" % len(ip_list.keys()))
+        return ip_list
 
-    # collect up the list of floating IPs for each client in the list along with
-    # the tenant they belong to
-    for region, components in clients.iteritems():
-        ip_list.update({
-            ip['floating_ip_address']: {'region': region, 'tenant_id': ip['tenant_id'], 'id': ip['id'], 'type': 'floating'} for ip in components['neutron'].list_floatingips()['floatingips']
-        })
+    def _neutron_router_ip_list(self):
+        """
+        Return a list of all the router IPs across a given list of clients along
+        with the associated tenant_id and router id.
 
-    logging.info("loaded %i OpenStack floating IPs" % len(ip_list.keys()))
-    return ip_list
+        XXX Currently this function is rather inelegant and would benefit from some
+        expert attention.
 
-def _neutron_router_ip_list(clients):
-    """
-    Return a list of all the router IPs across a given list of clients along
-    with the associated tenant_id and router id.
+        >>> clients = [_neutron_client('test-1'), _neutron_client('test-2')]
+        >>> _neutron_router_ip_list(clients)
+        {u'192.0.2.1': {'id': u'd68d3e4a-ddc4-4113-82ec-59a0f445ed58',
+                             'tenant_id': u'b14a61424d89c3e25bb31082b5f34dd7',
+                             'type': 'router',
+                             'region': 'test-1'},
+         u'192.0.2.2': {'id': u'2832bbe0-0597-440b-a8d0-b7cd5108c252',
+                             'tenant_id': u'adb73920d5525d53a8f0feb005a5dca9',
+                             'type': 'router',
+                             'region': 'test-1'}}
+        """
 
-    XXX Currently this function is rather inelegant and would benefit from some
-    expert attention.
+        ip_list = {}
 
-    >>> clients = [_neutron_client('test-1'), _neutron_client('test-2')]
-    >>> _neutron_router_ip_list(clients)
-    {u'192.0.2.1': {'id': u'd68d3e4a-ddc4-4113-82ec-59a0f445ed58',
-                         'tenant_id': u'b14a61424d89c3e25bb31082b5f34dd7',
-                         'type': 'router',
-                         'region': 'test-1'},
-     u'192.0.2.2': {'id': u'2832bbe0-0597-440b-a8d0-b7cd5108c252',
-                         'tenant_id': u'adb73920d5525d53a8f0feb005a5dca9',
-                         'type': 'router',
-                         'region': 'test-1'}}
-    """
+        for region, components in self.clients.iteritems():
+            client = components['neutron']
 
-    ip_list = {}
+            external_networks = [
+                network for network in client.list_networks()['networks'] if network['router:external']
+            ]
+            external_subnets = sum([network['subnets'] for network in external_networks], [])
 
-    for region, components in clients.iteritems():
-        client = components['neutron']
+            ports = client.list_ports()['ports'] # get all ports in region for all devices
+            routers = {router['id']: router for router in client.list_routers()['routers']} # and get all routers
 
-        external_networks = [
-            network for network in client.list_networks()['networks'] if network['router:external']
-        ]
-        external_subnets = sum([network['subnets'] for network in external_networks], [])
+            for port in ports:
+                if port['device_id'] in routers: # if the port belongs to a router...
 
-        ports = client.list_ports()['ports'] # get all ports in region for all devices
-        routers = {router['id']: router for router in client.list_routers()['routers']} # and get all routers
+                    # ... extract the IPs belonging to the port and check if they
+                    # belong to a subnet which is part of an "external" network
+                    external_ips = [
+                        ip['ip_address'] for ip in port['fixed_ips'] if ip['subnet_id'] in external_subnets
+                    ]
 
-        for port in ports:
-            if port['device_id'] in routers: # if the port belongs to a router...
+                    tenant_id = routers[port['device_id']]['tenant_id']
 
-                # ... extract the IPs belonging to the port and check if they
-                # belong to a subnet which is part of an "external" network
-                external_ips = [
-                    ip['ip_address'] for ip in port['fixed_ips'] if ip['subnet_id'] in external_subnets
-                ]
+                    # generate an ip_list compatible with the floating IP list, except here the
+                    # id refers to the router itself rather than an IP address object
+                    ip_list.update({
+                        ip: {'region': region, 'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
+                    })
 
-                tenant_id = routers[port['device_id']]['tenant_id']
+        logging.info("loaded %i OpenStack router IPs" % len(ip_list.keys()))
 
-                # generate an ip_list compatible with the floating IP list, except here the
-                # id refers to the router itself rather than an IP address object
-                ip_list.update({
-                    ip: {'region': region, 'tenant_id': tenant_id, 'id': port['device_id'], 'type': 'router'} for ip in external_ips
-                })
+        return ip_list
 
-    logging.info("loaded %i OpenStack router IPs" % len(ip_list.keys()))
+    def _neutron_ip_list(self):
+        """
+        Collect all IPs that are interesting for billing from both floating IPs
+        and routers and return an aggregate dictionary.
+        """
 
-    return ip_list
+        ip_list = self._neutron_floating_ip_list()
+        ip_list.update(self._neutron_router_ip_list())
+        return ip_list
 
-def _neutron_ip_list(clients):
-    """
-    Collect all IPs that are interesting for billing from both floating IPs
-    and routers and return an aggregate dictionary.
-    """
+    def _load_networks_from_file(self, filename):
+        """
+        Load a list of IPv4 and IPv6 networks from filename and return a list of
+        IPNetwork objects corresponding to any valid networks in the file.
+        """
 
-    ip_list = _neutron_floating_ip_list(clients)
-    ip_list.update(_neutron_router_ip_list(clients))
-    return ip_list
+        networks = []
 
-def _load_networks_from_file(filename):
-    """
-    Load a list of IPv4 and IPv6 networks from filename and return a list of
-    IPNetwork objects corresponding to any valid networks in the file.
-    """
+        with open(filename, 'r') as fp:
+            for line in fp:
 
-    networks = []
+                # validate network by parsing it and skip if it doesn't validate
+                try:
+                    networks.append(ipaddr.IPNetwork(line.strip()))
+                except:
+                    continue
 
-    with open(filename, 'r') as fp:
-        for line in fp:
+        logging.info("loaded %i networks from %s" % (len(networks), filename))
 
-            # validate network by parsing it and skip if it doesn't validate
-            try:
-                networks.append(ipaddr.IPNetwork(line.strip()))
-            except:
-                continue
+        return networks
 
-    logging.info("loaded %i networks from %s" % (len(networks), filename))
 
-    return networks
+    def __init__(self, queue):
+        self.queue = queue
+        self.config = ConfigParser.ConfigParser(allow_no_value=True)
+        try:
+            self.config.read('accounting.cfg')
+        except:
+            raise Exception("unable to read `accounting.cfg'")
 
+        # samples that cannot be submitted immediately to ceilometer go in to the queue
+
+        try:
+            self.local_queue_conn = sqlite3.connect(self.config.get('settings', 'local-queue'))
+            self.local_queue_cursor = self.local_queue_conn.cursor()
+            self.local_queue_cursor.execute("""
+                CREATE TABLE IF NOT EXISTS `queue` (
+                    `octets`    INTEGER NOT NULL,
+                    `address`   TEXT NOT NULL,
+                    `object_id` TEXT NOT NULL,
+                    `tenant_id` TEXT NOT NULL,
+                    `direction` TEXT NOT NULL,
+                    `billing`   TEXT NOT NULL,
+                    `region`    TEXT NOT NULL,
+                    `created`   INTEGER NOT NULL,
+                    `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
+                );
+            """)
+            self.local_queue_conn.commit()
+        except:
+            raise Exception("unable to open disk cache sqlite database %s" % self.config.get('settings', 'local-queue'))
+
+        # the number of seconds between submissions to ceilometer
+        self.buffer_flush_interval = int(self.config.get('settings','buffer-flush-interval'))
+
+        # connect to neutron and ceilometer for all regions where accting is desired
+        try:
+            self.clients = {
+                region[0].strip(): {'neutron': self._neutron_client(region[0].strip()), 'ceilometer': self._ceilometer_client(region[0].strip())} for region in self.config.items('regions')
+            }
+        except:
+            raise Exception("unable to create any OpenStack client connections - is your auth environment right?")
+
+        # local_networks is the list of addresses at the local site that will be accounted
+        try:
+            self.local_networks = self._load_networks_from_file(self.config.get('settings','local-networks'))
+        except:
+            raise Exception("unable to load list of local networks from %s" % self.config.get('settings','local-networks'))
+
+        # networks which will get a particular classification
+        try:
+            self.classified_networks = {classification: self._load_networks_from_file(networks) for classification, networks in self.config.items('classifications')}
+            self.unclassifiable_network = self.config.get('settings','unclassifiable') # fall back if no classification possible
+        except:
+            raise Exception("unable to load network classifications")
+
+    def process_queue(self):
+        """
+        Run as a multiprocessing.Process given a multiprocessing.Queue in which
+        decoded sFlow packets will be inserted.
+
+        Processes the queued sFlow packets, classifies the traffic and periodically
+        sends updates to ceilometer.
+
+        IPs which move between tenants during the buffer_flush_interval will be ignored.
+
+        Records sent to ceilometer will be of the form:
+
+        78000 octets for IP 192.0.2.1 (id=906116c9-2caf-4360-b567-f4822e861bea, tenant_id=5ab78936f80a827b09dc077b372d4514) to traffic.inbound.international
+        """
+
+        # query OpenStack for the mappings of IP address to tenant so it can be checked later
+        # this allows an IP address to move between tenants during a buffer_flush_interval
+        # without the wrong tenant being billed for part of the traffic (the interval will instead
+        # be discarded)
+        old_ip_ownership = self._neutron_ip_list()
+
+        empty_totals_entry = {
+            'inbound': {k:0 for k in self.classified_networks.keys()+[self.unclassifiable_network]},
+            'outbound': {k:0 for k in self.classified_networks.keys()+[self.unclassifiable_network]},
+        }
+
+        timestamp = int(time.time())
+        totals = {}
+
+        while True:
+            sflow_packet = self.queue.get()
+
+            # "samples" can be of several types, only "flow" samples will end up here
+            # XXX add checks so sflow code can be made more generic
+            for sample in sflow_packet['samples']:
+
+                # every "flow" corresponds to a truncated packet pulled off the wire
+                # on one of the agents (e.g. routers)
+                for flow in sample['flows']:
+
+                    try:
+                        flow_frame = Frame(flow['payload'])
+                    except:
+                        logging.warning('unable to parse payload :(')
+                        continue
+
+                    if not flow_frame.has_ip: # ignore packets without an IP header as
+                        continue              # they won't have a source or destination address
+
+                    # determine whether or not the packet was sampled inbound or outbound
+                    # on the agent interface. agent interfaces should face transit providers,
+                    # so this direction is also relative to the AS where this runs.
+                    if sample['input'] == sflow.FlowCollector.SFLOW_INTERFACE_INTERNAL:
+                        direction = 'outbound'
+                        local_address = flow_frame.source_ip
+                        remote_address = flow_frame.destination_ip
+                    else:
+                        direction = 'inbound'
+                        local_address = flow_frame.destination_ip
+                        remote_address = flow_frame.source_ip
+
+                    # ignore addresses not in the "local-networks" set, this will
+                    # ignore transit packets
+                    if not self._address_in_network_list(local_address, self.local_networks):
+                        continue
+
+                    billing = None
+
+                    # determine which billing class the packet belongs to, if any
+                    for network_class, networks_in_class in self.classified_networks.iteritems():
+                        if self._address_in_network_list(remote_address, networks_in_class):
+                            billing = network_class
+                            break
+
+                    if not billing:
+                        billing = self.unclassifiable_network
+
+                    if local_address not in totals:
+                        totals[local_address] = copy.deepcopy(empty_totals_entry)
+
+                    # multiply the original length of the packet by the sampling
+                    # rate to produce an estimate of the "real world" traffic it
+                    # represents then increment the totals with that amount (in octets)
+                    totals[local_address][direction][billing] += (flow['frame_length'] - flow['stripped'] - flow_frame.sum_header_lengths()) * sample['sampling_rate']
+
+            if time.time() - timestamp >= self.buffer_flush_interval and len(totals) > 0:
+                start_time = time.time()
+                logging.info("sending ceilometer data for %i local IPs" % len(totals))
+
+                # re-request the mapping of IP addresses to tenants from OpenStack
+                new_ip_ownership = self._neutron_ip_list()
+
+                # addresses where the owner tenant is no longer the same as the beginning
+                # of this interval are removed from the totals to be submitted
+                for address, details in new_ip_ownership.iteritems():
+                    if address in old_ip_ownership and old_ip_ownership[address]['tenant_id'] != details['tenant_id']:
+                        logging.info("ownership of %s changed during period" % address)
+                        totals.pop(address, None)
+
+                old_ip_ownership = new_ip_ownership
+                ceilometer_is_working = True # optimistic
+
+                for address, traffic in totals.iteritems():
+                    address_string = str(address)
+
+                    if address_string not in new_ip_ownership:
+                        logging.info("%s not a tenant or router IP, ignoring" % address)
+                        continue
+
+
+                    for direction in ('inbound', 'outbound'):
+                        for billing in self.classified_networks.keys()+[self.unclassifiable_network]:
+                            if traffic[direction][billing] > 0:
+
+                                logging.debug("ceilometer record submission - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s" % {
+                                    'octets': traffic[direction][billing],
+                                    'address': address_string,
+                                    'id': new_ip_ownership[address_string]['id'],
+                                    'tenant_id': new_ip_ownership[address_string]['tenant_id'],
+                                    'direction': direction,
+                                    'billing': billing,
+                                    'region': new_ip_ownership[address_string]['region'],
+                                })
+
+                                try:
+                                    if ceilometer_is_working:
+                                        self.clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
+                                            source='Traffic accounting',
+                                            counter_name='traffic.%s.%s' % (direction, billing),
+                                            counter_type='delta',
+                                            counter_unit='byte',
+                                            counter_volume=traffic[direction][billing],
+                                            project_id=new_ip_ownership[address_string]['tenant_id'],
+                                            resource_id=new_ip_ownership[address_string]['id'],
+                                            timestamp=datetime.datetime.utcnow().isoformat(),
+                                            resource_metadata={}
+                                        )
+                                    else:
+                                        raise Exception("Ceilometer is not working.")
+                                except:
+                                    ceilometer_is_working = False
+                                    logging.info("ceilometer submit failed, putting in database instead")
+                                    self.local_queue_cursor.execute(
+                                        "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, datetime('now'), null);",
+                                        (
+                                            traffic[direction][billing],
+                                            address_string,
+                                            new_ip_ownership[address_string]['id'],
+                                            new_ip_ownership[address_string]['tenant_id'],
+                                            direction,
+                                            billing,
+                                            new_ip_ownership[address_string]['region'],
+                                        ),
+                                    )
+
+                # try and cut down the number of queued-on-disk items waiting to go to ceilometer
+                if ceilometer_is_working:
+                    for row in self.local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall():
+                        try:
+                            logging.info("unspooling a thing from the db in to ceilometer...")
+                            self.clients[row[6]]['ceilometer'].samples.create(
+                                source='Traffic accounting',
+                                counter_name='traffic.%s.%s' % (row[4], row[5]),
+                                counter_type='delta',
+                                counter_unit='byte',
+                                counter_volume=row[0],
+                                project_id=row[3],
+                                resource_id=row[2],
+                                timestamp=row[7],
+                                resource_metadata={}
+                            )
+                        except:
+                            logging.info("ceilometer is still broken, will get this record next time around")
+                            break
+                        else:
+                            logging.info("unspooled OK, removing from queue")
+                            self.local_queue_cursor.execute('DELETE FROM queue WHERE id=?', (row[8],))
+
+
+                self.local_queue_conn.commit()
+                logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
+                logging.info("queue is now %i entries long" % self.queue.qsize())
+
+                totals = {}
+                timestamp = int(time.time())
 
 def accounting(queue):
-    """
-    Run as a multiprocessing.Process given a multiprocessing.Queue in which
-    decoded sFlow packets will be inserted.
-
-    Processes the queued sFlow packets, classifies the traffic and periodically
-    sends updates to ceilometer.
-
-    IPs which move between tenants during the buffer_flush_interval will be ignored.
-
-    Records sent to ceilometer will be of the form:
-
-    78000 octets for IP 192.0.2.1 (id=906116c9-2caf-4360-b567-f4822e861bea, tenant_id=5ab78936f80a827b09dc077b372d4514) to traffic.inbound.international
-    """
-
-    config = ConfigParser.ConfigParser(allow_no_value=True)
-    config.read('accounting.cfg')
-
-    # samples that cannot be submitted immediately to ceilometer go in to the queue
-    local_queue_conn = sqlite3.connect(config.get('settings', 'local-queue'))
-    local_queue_cursor = local_queue_conn.cursor()
-    local_queue_cursor.execute("""
-        CREATE TABLE IF NOT EXISTS `queue` (
-            `octets`    INTEGER NOT NULL,
-            `address`   TEXT NOT NULL,
-            `object_id` TEXT NOT NULL,
-            `tenant_id` TEXT NOT NULL,
-            `direction` TEXT NOT NULL,
-            `billing`   TEXT NOT NULL,
-            `region`    TEXT NOT NULL,
-            `created`   INTEGER NOT NULL,
-            `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
-        );
-    """)
-    local_queue_conn.commit()
-
-    # the number of seconds between submissions to ceilometer
-    buffer_flush_interval = int(config.get('settings','buffer-flush-interval'))
-
-    # connect to neutron and ceilometer for all regions where accting is desired
-    try:
-        clients = {
-            region[0].strip(): {'neutron': _neutron_client(region[0].strip()), 'ceilometer': _ceilometer_client(region[0].strip())} for region in config.items('regions')
-        }
-    except:
-        logging.error("unable to create any OpenStack client connections - is your auth environment right?")
-        sys.exit(2)
-
-    # local_networks is the list of addresses at the local site that will be accounted
-    local_networks = _load_networks_from_file(config.get('settings','local-networks'))
-
-    # networks which will get a particular classification
-    classified_networks = {classification: _load_networks_from_file(networks) for classification, networks in config.items('classifications')}
-    unclassifiable_network = config.get('settings','unclassifiable') # fall back if no classification possible
-
-    # query OpenStack for the mappings of IP address to tenant so it can be checked later
-    # this allows an IP address to move between tenants during a buffer_flush_interval
-    # without the wrong tenant being billed for part of the traffic (the interval will instead
-    # be discarded)
-    old_ip_ownership = _neutron_ip_list(clients)
-
-    empty_totals_entry = {
-        'inbound': {k:0 for k in classified_networks.keys()+[unclassifiable_network]},
-        'outbound': {k:0 for k in classified_networks.keys()+[unclassifiable_network]},
-    }
-
-    timestamp = int(time.time())
-    totals = {}
-
-    while True:
-        sflow_packet = queue.get()
-
-        # "samples" can be of several types, only "flow" samples will end up here
-        # XXX add checks so sflow code can be made more generic
-        for sample in sflow_packet['samples']:
-
-            # every "flow" corresponds to a truncated packet pulled off the wire
-            # on one of the agents (e.g. routers)
-            for flow in sample['flows']:
-                flow_frame = Frame(flow['payload'])
-
-                if not flow_frame.has_ip: # ignore packets without an IP header as
-                    continue              # they won't have a source or destination address
-
-                # determine whether or not the packet was sampled inbound or outbound
-                # on the agent interface. agent interfaces should face transit providers,
-                # so this direction is also relative to the AS where this runs.
-                if sample['input'] == sflow.FlowCollector.SFLOW_INTERFACE_INTERNAL:
-                    direction = 'outbound'
-                    local_address = flow_frame.source_ip
-                    remote_address = flow_frame.destination_ip
-                else:
-                    direction = 'inbound'
-                    local_address = flow_frame.destination_ip
-                    remote_address = flow_frame.source_ip
-
-                # ignore addresses not in the "local-networks" set, this will
-                # ignore transit packets
-                if not _address_in_network_list(local_address, local_networks):
-                    continue
-
-                billing = None
-
-                # determine which billing class the packet belongs to, if any
-                for network_class, networks_in_class in classified_networks.iteritems():
-                    if _address_in_network_list(remote_address, networks_in_class):
-                        billing = network_class
-                        break
-
-                if not billing:
-                    billing = unclassifiable_network
-
-                if local_address not in totals:
-                    totals[local_address] = copy.deepcopy(empty_totals_entry)
-
-                # multiply the original length of the packetby the sampling
-                # rate to produce an estimate of the "real world" traffic it
-                # represents then increment the totals with that amount (in octets)
-                totals[local_address][direction][billing] += (flow['frame_length'] - flow['stripped'] - _sum_header_lengths(flow_frame)) * sample['sampling_rate']
-
-        if time.time() - timestamp >= buffer_flush_interval and len(totals) > 0:
-            start_time = time.time()
-            logging.info("sending ceilometer data for %i local IPs" % len(totals))
-
-            # re-request the mapping of IP addresses to tenants from OpenStack
-            new_ip_ownership = _neutron_ip_list(clients)
-
-            # addresses where the owner tenant is no longer the same as the beginning
-            # of this interval are removed from the totals to be submitted
-            for address, details in new_ip_ownership.iteritems():
-                if address in old_ip_ownership and old_ip_ownership[address]['tenant_id'] != details['tenant_id']:
-                    logging.info("ownership of %s changed during period" % address)
-                    totals.pop(address, None)
-
-            old_ip_ownership = new_ip_ownership
-            ceilometer_is_working = True # optimistic
-
-            for address, traffic in totals.iteritems():
-                address_string = str(address)
-
-                if address_string not in new_ip_ownership:
-                    logging.info("%s not a tenant or router IP, ignoring" % address)
-                    continue
-
-
-                for direction in ('inbound', 'outbound'):
-                    for billing in classified_networks.keys()+[unclassifiable_network]:
-                        if traffic[direction][billing] > 0:
-
-                            # XXX ceilometer submission will happen here
-                            logging.info("ceilometer record submission - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s" % {
-                                'octets': traffic[direction][billing],
-                                'address': address_string,
-                                'id': new_ip_ownership[address_string]['id'],
-                                'tenant_id': new_ip_ownership[address_string]['tenant_id'],
-                                'direction': direction,
-                                'billing': billing,
-                                'region': new_ip_ownership[address_string]['region'],
-                            })
-
-                            try:
-                                if ceilometer_is_working:
-                                    clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
-                                        source='Traffic accounting',
-                                        counter_name='traffic.%s.%s' % (direction, billing),
-                                        counter_type='delta',
-                                        counter_unit='byte',
-                                        counter_volume=traffic[direction][billing],
-                                        project_id=new_ip_ownership[address_string]['tenant_id'],
-                                        resource_id=new_ip_ownership[address_string]['id'],
-                                        timestamp=datetime.datetime.utcnow().isoformat(),
-                                        resource_metadata={}
-                                    )
-                                else:
-                                    raise("Ceilometer is not working.")
-                            except:
-                                ceilometer_is_working = False
-                                logging.info("ceilometer submit failed, putting in database instead")
-                                local_queue_cursor.execute(
-                                    "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, datetime('now'), null);",
-                                    (
-                                        traffic[direction][billing],
-                                        address_string,
-                                        new_ip_ownership[address_string]['id'],
-                                        new_ip_ownership[address_string]['tenant_id'],
-                                        direction,
-                                        billing,
-                                        new_ip_ownership[address_string]['region'],
-                                    ),
-                                )
-
-            # try and cut down the number of queued-on-disk items waiting to go to ceilometer
-            if ceilometer_is_working:
-                for row in local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall():
-                    try:
-                        logging.info("unspooling a thing from the db in to ceilometer...")
-                        clients[row[6]]['ceilometer'].samples.create(
-                            source='Traffic accounting',
-                            counter_name='traffic.%s.%s' % (row[4], row[5]),
-                            counter_type='delta',
-                            counter_unit='byte',
-                            counter_volume=row[0],
-                            project_id=row[3],
-                            resource_id=row[2],
-                            timestamp=row[7],
-                            resource_metadata={}
-                        )
-                    except:
-                        logging.info("ceilometer is still broken, will get this record next time around")
-                        break
-                    else:
-                        logging.info("unspooled OK, removing from queue")
-                        local_queue_cursor.execute('DELETE FROM queue WHERE id=?',(row[8],))
-
-
-            local_queue_conn.commit()
-            logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
-            logging.info("queue is now %i entries long" % queue.qsize())
-
-            totals = {}
-            timestamp = int(time.time())
-
+    collector = AccountingCollector(queue)
+    collector.process_queue()
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
@@ -550,7 +575,7 @@ if __name__ == '__main__':
     collector = sflow.FlowCollector()
 
     # receieve sFlow packets from the network and send them to the accounting process
-    for packet in collector.receive():
-        accounting_packet_queue.put(packet)
+    for sflow_packet in collector.receive():
+        accounting_packet_queue.put(sflow_packet)
 
     accounting_process.join()
