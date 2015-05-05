@@ -382,6 +382,8 @@ class AccountingCollector(object):
         # be discarded)
         old_ip_ownership = self._neutron_ip_list()
 
+        logging.info("starting collector...")
+
         empty_totals_entry = {
             'inbound': {k:0 for k in self.classified_networks.keys()+[self.unclassifiable_network]},
             'outbound': {k:0 for k in self.classified_networks.keys()+[self.unclassifiable_network]},
@@ -509,7 +511,7 @@ class AccountingCollector(object):
                     database_samples = self.local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall()
                     if len(database_samples) == 0:
                         break
-                    logging.info("attempting to re-submit samples spooled on disk...")
+                    logging.info("attempting to re-submit %i samples spooled on disk..." % len(database_samples))
                     for row in database_samples:
                         try:
                             logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(row), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
@@ -532,14 +534,13 @@ class AccountingCollector(object):
 
                 self.local_queue_conn.commit()
                 logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
-                logging.info("queue is now %i entries long" % self.queue.qsize())
+                logging.info("in-memory queue is now %i entries long" % self.queue.qsize())
 
                 totals = {}
                 timestamp = int(time.time())
 
 def accounting(queue):
     collector = AccountingCollector(queue)
-    logging.info("starting collector...")
     collector.process_queue()
 
 if __name__ == '__main__':
