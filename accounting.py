@@ -482,7 +482,7 @@ class AccountingCollector(object):
                                     'timestamp': datetime.datetime.utcnow().isoformat(),
                                 }
 
-                                logging.debug("submitting %(counter_volume)s octets by %(address)s (resource_id=%(resource_id)s, project_id=%(project_id)s) to %(counter_name)s in %(region)s" % ceilometer_record.update({'address': address_string, 'region': new_ip_ownership[address_string]['region']}))
+                                logging.debug("submitting %(record[counter_volume])s octets by %(record[address])s (resource_id=%(record[resource_id])s, project_id=%(record[project_id])s) to %(record[counter_name])s in %(region)s" % {'record': ceilometer_record, 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
 
                                 try:
                                     if ceilometer_is_working:
@@ -498,9 +498,10 @@ class AccountingCollector(object):
                                 except:
                                     ceilometer_is_working = False
                                     logging.info("ceilometer submit failed, putting in database instead")
+                                    ceilometer_record.update({'region': new_ip_ownership[address_string]['region']})
                                     self.local_queue_cursor.execute(
-                                        "INSERT INTO queue VALUES(:counter_name, :counter_volume, :project_id, :resource_id, datetime('now'), null);",
-                                        ceilometer_record.update({'region': new_ip_ownership[address_string]['region']}),
+                                        "INSERT INTO queue VALUES(:counter_name, :counter_volume, :project_id, :resource_id, :region, datetime('now'), null);",
+                                        ceilometer_record,
                                     )
 
                 # try and cut down the number of queued-on-disk items waiting to go to ceilometer
@@ -508,7 +509,7 @@ class AccountingCollector(object):
                     for row in self.local_queue_cursor.execute('SELECT * FROM queue ORDER BY created LIMIT 200;').fetchall():
                         try:
                             logging.info("unspooling a thing from the db in to ceilometer...")
-                            self.clients[row[6]]['ceilometer'].samples.create(
+                            self.clients[row[4]]['ceilometer'].samples.create(
                                 source='Traffic accounting',
                                 resource_metadata={},
                                 counter_type='delta',
@@ -517,14 +518,14 @@ class AccountingCollector(object):
                                 counter_volume=row[1],
                                 project_id=row[2],
                                 resource_id=row[3],
-                                timestamp=row[7],
+                                timestamp=row[5],
                             )
                         except:
                             logging.info("ceilometer is still broken, will get this record next time around")
                             break
                         else:
                             logging.info("unspooled OK, removing from queue")
-                            self.local_queue_cursor.execute('DELETE FROM queue WHERE id=?', (row[8],))
+                            self.local_queue_cursor.execute('DELETE FROM queue WHERE id=?', (row[6],))
 
 
                 self.local_queue_conn.commit()
