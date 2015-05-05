@@ -482,7 +482,7 @@ class AccountingCollector(object):
                                     'timestamp': datetime.datetime.utcnow().isoformat(),
                                 }
 
-                                logging.debug("submitting %(record[counter_volume])s octets by %(record[address])s (resource_id=%(record[resource_id])s, project_id=%(record[project_id])s) to %(record[counter_name])s in %(region)s" % {'record': ceilometer_record, 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
+                                logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(ceilometer_record), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
 
                                 try:
                                     if ceilometer_is_working:
