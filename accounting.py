@@ -59,7 +59,6 @@ class ForkedPdb(pdb.Pdb):
         finally:
             sys.stdin = _stdin
 
-
 class Frame(object):
     """
     Given the raw bytes of an Ethernet II frame extract some useful parameters.
@@ -147,6 +146,9 @@ class Frame(object):
         )
 
 class AccountingCollector(object):
+    """
+    Processes incoming packets and submits samples to Ceilometer.
+    """
 
     @staticmethod
     def _address_in_network_list(address, networks):
@@ -325,13 +327,11 @@ class AccountingCollector(object):
             self.local_queue_cursor = self.local_queue_conn.cursor()
             self.local_queue_cursor.execute("""
                 CREATE TABLE IF NOT EXISTS `queue` (
-                    `octets`    INTEGER NOT NULL,
-                    `address`   TEXT NOT NULL,
-                    `object_id` TEXT NOT NULL,
-                    `tenant_id` TEXT NOT NULL,
-                    `direction` TEXT NOT NULL,
-                    `billing`   TEXT NOT NULL,
-                    `region`    TEXT NOT NULL,
+                    `counter_name` TEXT NOT NULL,
+                    `counter_volume` INTEGER NOT NULL,
+                    `project_id` TEXT NOT NULL,
+                    `resource_id` TEXT NOT NULL,
+                    `region` TEXT NOT NULL,
                     `created`   INTEGER NOT NULL,
                     `id`    INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
                 );
@@ -366,9 +366,6 @@ class AccountingCollector(object):
 
     def process_queue(self):
         """
-        Run as a multiprocessing.Process given a multiprocessing.Queue in which
-        decoded sFlow packets will be inserted.
-
         Processes the queued sFlow packets, classifies the traffic and periodically
         sends updates to ceilometer.
 
@@ -473,33 +470,28 @@ class AccountingCollector(object):
                         logging.info("%s not a tenant or router IP, ignoring" % address)
                         continue
 
-
                     for direction in ('inbound', 'outbound'):
                         for billing in self.classified_networks.keys()+[self.unclassifiable_network]:
                             if traffic[direction][billing] > 0:
 
-                                logging.debug("ceilometer record submission - %(octets)s octets by %(address)s (id=%(id)s, tenant_id=%(tenant_id)s) to traffic.%(direction)s.%(billing)s in region %(region)s" % {
-                                    'octets': traffic[direction][billing],
-                                    'address': address_string,
-                                    'id': new_ip_ownership[address_string]['id'],
-                                    'tenant_id': new_ip_ownership[address_string]['tenant_id'],
-                                    'direction': direction,
-                                    'billing': billing,
-                                    'region': new_ip_ownership[address_string]['region'],
-                                })
+                                ceilometer_record = {
+                                    'counter_name': 'traffic.%s.%s' % (direction, billing),
+                                    'counter_volume': traffic[direction][billing],
+                                    'project_id': new_ip_ownership[address_string]['tenant_id'],
+                                    'resource_id': new_ip_ownership[address_string]['id'],
+                                    'timestamp': datetime.datetime.utcnow().isoformat(),
+                                }
+
+                                logging.debug("submitting %(counter_volume)s octets by %(address)s (resource_id=%(resource_id)s, project_id=%(project_id)s) to %(counter_name)s in %(region)s" % ceilometer_record.update({'address': address_string, 'region': new_ip_ownership[address_string]['region']}))
 
                                 try:
                                     if ceilometer_is_working:
                                         self.clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
                                             source='Traffic accounting',
-                                            counter_name='traffic.%s.%s' % (direction, billing),
+                                            resource_metadata={},
                                             counter_type='delta',
                                             counter_unit='byte',
-                                            counter_volume=traffic[direction][billing],
-                                            project_id=new_ip_ownership[address_string]['tenant_id'],
-                                            resource_id=new_ip_ownership[address_string]['id'],
-                                            timestamp=datetime.datetime.utcnow().isoformat(),
-                                            resource_metadata={}
+                                            **ceilometer_record
                                         )
                                     else:
                                         raise Exception("Ceilometer is not working.")
@@ -507,16 +499,8 @@ class AccountingCollector(object):
                                     ceilometer_is_working = False
                                     logging.info("ceilometer submit failed, putting in database instead")
                                     self.local_queue_cursor.execute(
-                                        "INSERT INTO queue VALUES(?, ?, ?, ?, ?, ?, ?, datetime('now'), null);",
-                                        (
-                                            traffic[direction][billing],
-                                            address_string,
-                                            new_ip_ownership[address_string]['id'],
-                                            new_ip_ownership[address_string]['tenant_id'],
-                                            direction,
-                                            billing,
-                                            new_ip_ownership[address_string]['region'],
-                                        ),
+                                        "INSERT INTO queue VALUES(:counter_name, :counter_volume, :project_id, :resource_id, datetime('now'), null);",
+                                        ceilometer_record.update({'region': new_ip_ownership[address_string]['region']}),
                                     )
 
                 # try and cut down the number of queued-on-disk items waiting to go to ceilometer
@@ -526,14 +510,14 @@ class AccountingCollector(object):
                             logging.info("unspooling a thing from the db in to ceilometer...")
                             self.clients[row[6]]['ceilometer'].samples.create(
                                 source='Traffic accounting',
-                                counter_name='traffic.%s.%s' % (row[4], row[5]),
+                                resource_metadata={},
                                 counter_type='delta',
                                 counter_unit='byte',
-                                counter_volume=row[0],
-                                project_id=row[3],
-                                resource_id=row[2],
+                                counter_name=row[0],
+                                counter_volume=row[1],
+                                project_id=row[2],
+                                resource_id=row[3],
                                 timestamp=row[7],
-                                resource_metadata={}
                             )
                         except:
                             logging.info("ceilometer is still broken, will get this record next time around")
@@ -579,3 +563,4 @@ if __name__ == '__main__':
         accounting_packet_queue.put(sflow_packet)
 
     accounting_process.join()
+    logging.shutdown()
