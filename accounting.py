@@ -535,6 +535,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
     logging.getLogger("neutronclient.client").setLevel(logging.ERROR)
     logging.getLogger("keystoneclient.session").setLevel(logging.ERROR)
+    logging.getLogger("urllib3.connectionpool").setLevel(logging.ERROR)
 
     logging.info("starting sFlow and accounting processes...")
 
