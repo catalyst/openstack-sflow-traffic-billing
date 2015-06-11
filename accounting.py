@@ -544,8 +544,8 @@ def accounting(queue):
     collector.process_queue()
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.DEBUG)
-
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
+    
     # reduce the logging verbosity of some openstack components
     logging.getLogger("neutronclient.client").setLevel(logging.ERROR)
     logging.getLogger("keystoneclient.session").setLevel(logging.ERROR)
