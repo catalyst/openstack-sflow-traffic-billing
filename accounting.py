@@ -150,6 +150,10 @@ class AccountingCollector(object):
     Processes incoming packets and submits samples to Ceilometer.
     """
 
+    def _mark_success(self):
+        with open(self.success_file, 'a'):
+            os.utime(self.success_file, None)
+
     @staticmethod
     def _address_in_network_list(address, networks):
         """
@@ -340,6 +344,9 @@ class AccountingCollector(object):
         except:
             raise Exception("unable to open disk cache sqlite database %s" % self.config.get('settings', 'local-queue'))
 
+        # file to touch on ceilometer submission success, for interim monitoring 
+        self.success_file = int(self.config.get('settings','success-file'))
+
         # the number of seconds between submissions to ceilometer
         self.buffer_flush_interval = int(self.config.get('settings','buffer-flush-interval'))
 
@@ -505,6 +512,8 @@ class AccountingCollector(object):
                                         "INSERT INTO queue VALUES(:counter_name, :counter_volume, :project_id, :resource_id, :region, datetime('now'), null);",
                                         ceilometer_record,
                                     )
+                                else:
+                                    self._mark_success()
 
                 # try and cut down the number of queued-on-disk items waiting to go to ceilometer
                 while ceilometer_is_working and time.time() - start_time < 300:
