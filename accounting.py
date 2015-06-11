@@ -345,7 +345,7 @@ class AccountingCollector(object):
             raise Exception("unable to open disk cache sqlite database %s" % self.config.get('settings', 'local-queue'))
 
         # file to touch on ceilometer submission success, for interim monitoring 
-        self.success_file = int(self.config.get('settings','success-file'))
+        self.success_file = self.config.get('settings','success-file')
 
         # the number of seconds between submissions to ceilometer
         self.buffer_flush_interval = int(self.config.get('settings','buffer-flush-interval'))
