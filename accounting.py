@@ -560,10 +560,10 @@ class AccountingCollector(object):
 
                 # XXX this is a terrible way to report the state, but it will do for now
                 memory_queue_lengths.append(self.queue.qsize())
-                if len(q) == 5 and list(q) == sorted(q):
-                    self._mark_success(self.queue_length_file, self.queue.qsize())
+                if len(memory_queue_lengths) == 5 and list(memory_queue_lengths) == sorted(memory_queue_lengths):
+                    self._mark_success(self.queue_length_file, str(self.queue.qsize())
                 else:
-                    self._mark_success(self.queue_length_file, 0)
+                    self._mark_success(self.queue_length_file, '0')
 
                 totals = {}
                 timestamp = int(time.time())
