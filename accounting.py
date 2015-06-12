@@ -23,6 +23,7 @@ Michael Fincham <michael.fincham@catalyst.net.nz>
 """
 
 import binascii
+import collections
 import ConfigParser
 import copy
 import datetime
@@ -150,10 +151,6 @@ class AccountingCollector(object):
     Processes incoming packets and submits samples to Ceilometer.
     """
 
-    def _mark_success(self):
-        with open(self.success_file, 'a'):
-            os.utime(self.success_file, None)
-
     @staticmethod
     def _address_in_network_list(address, networks):
         """
@@ -200,6 +197,17 @@ class AccountingCollector(object):
             )
         except:
             raise Exception("Unable to create ceilometer client - is your environment set correctly?")
+
+
+    def _mark_success(self, success_file_name, content=None):
+        """
+        Touch a file, optionally writing some content to it as well.
+        """
+
+        with open(success_file_name, 'w') as success_file:
+            os.utime(success_file_name, None)
+            if content:
+                success_file.write(content)
 
     def _neutron_floating_ip_list(self):
         """
@@ -344,8 +352,10 @@ class AccountingCollector(object):
         except:
             raise Exception("unable to open disk cache sqlite database %s" % self.config.get('settings', 'local-queue'))
 
-        # file to touch on ceilometer submission success, for interim monitoring 
+        # file to touch on ceilometer submission success, for interim monitoring
         self.success_file = self.config.get('settings','success-file')
+        # file in to which undesirable queue length will be reported
+        self.queue_length_file = self.config.get('settings','queue-length-file')
 
         # the number of seconds between submissions to ceilometer
         self.buffer_flush_interval = int(self.config.get('settings','buffer-flush-interval'))
@@ -398,6 +408,9 @@ class AccountingCollector(object):
 
         timestamp = int(time.time())
         totals = {}
+
+        memory_queue_lengths = collections.deque([], 5)
+        disk_queue_lengths = collections.deque([], 5)
 
         while True:
             sflow_packet = self.queue.get()
@@ -496,7 +509,7 @@ class AccountingCollector(object):
                                 try:
                                     if ceilometer_is_working:
                                         self.clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
-                                            source='Traffic accounting',
+                                            source='TrafficAccounting',
                                             resource_metadata={},
                                             counter_type='delta',
                                             counter_unit='byte',
@@ -513,7 +526,7 @@ class AccountingCollector(object):
                                         ceilometer_record,
                                     )
                                 else:
-                                    self._mark_success()
+                                    self._mark_success(self.success_file)
 
                 # try and cut down the number of queued-on-disk items waiting to go to ceilometer
                 while ceilometer_is_working and time.time() - start_time < 300:
@@ -525,7 +538,7 @@ class AccountingCollector(object):
                         try:
                             logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(row), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
                             self.clients[row[4]]['ceilometer'].samples.create(
-                                source='Traffic accounting',
+                                source='TrafficAccounting',
                                 resource_metadata={},
                                 counter_type='delta',
                                 counter_unit='byte',
@@ -545,6 +558,13 @@ class AccountingCollector(object):
                 logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
                 logging.info("in-memory queue is now %i entries long" % self.queue.qsize())
 
+                # XXX this is a terrible way to report the state, but it will do for now
+                memory_queue_lengths.append(self.queue.qsize())
+                if len(q) == 5 and list(q) == sorted(q):
+                    self._mark_success(self.queue_length_file, self.queue.qsize())
+                else:
+                    self._mark_success(self.queue_length_file, 0)
+
                 totals = {}
                 timestamp = int(time.time())
 
@@ -554,7 +574,7 @@ def accounting(queue):
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
-    
+
     # reduce the logging verbosity of some openstack components
     logging.getLogger("neutronclient.client").setLevel(logging.ERROR)
     logging.getLogger("keystoneclient.session").setLevel(logging.ERROR)
