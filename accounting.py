@@ -576,8 +576,13 @@ class AccountingCollector(object):
                 timestamp = int(time.time())
 
 def accounting(queue):
-    collector = AccountingCollector(queue)
-    collector.process_queue()
+    while True:
+        try:
+            collector = AccountingCollector(queue)
+            collector.process_queue()
+        except:
+            logging.error("exception in accounting process, will restart it")
+
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
