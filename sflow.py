@@ -121,19 +121,6 @@ class FlowCollector(object):
     Listens for sFlow v5 flow records.
     """
 
-    TCP_LONG_FLAGS = {
-        'F': 'FIN',
-        'S': 'SYN',
-        'R': 'RST',
-        'P': 'PSH',
-        'A': 'ACK',
-        'U': 'URG',
-        'E': 'ECE',
-        'C': 'CWR',
-    }
-
-    SFLOW_INTERFACE_INTERNAL = 0x3FFFFFFF
-
     def __init__(self, bind_address='0.0.0.0', bind_port=6343):
         self.sflow_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         listen_address = (bind_address, bind_port)

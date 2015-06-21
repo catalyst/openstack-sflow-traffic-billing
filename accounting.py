@@ -64,6 +64,8 @@ class AccountingCollector(object):
     """
     Processes incoming packets and submits samples to Ceilometer.
     """
+    
+    SFLOW_INTERFACE_INTERNAL = 0x3FFFFFFF
 
     @staticmethod
     def _address_in_network_list(address, networks):
@@ -349,7 +351,7 @@ class AccountingCollector(object):
                     # determine whether or not the packet was sampled inbound or outbound
                     # on the agent interface. agent interfaces should face transit providers,
                     # so this direction is also relative to the AS where this runs.
-                    if sample['input'] == sflow.FlowCollector.SFLOW_INTERFACE_INTERNAL:
+                    if sample['input'] == AccountingCollector.SFLOW_INTERFACE_INTERNAL:
                         direction = 'outbound'
                         local_address = flow_frame.source_ip
                         remote_address = flow_frame.destination_ip
