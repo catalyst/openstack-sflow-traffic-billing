@@ -409,7 +409,7 @@ class AccountingCollector(object):
                             if traffic[direction][billing] > 0:
 
                                 if address_string not in new_ip_ownership:
-                                    logging.info("not submitting %(octets)i for %(direction)s.%(billing)s. because %(address)s is not a tenant or router IP" % {'octets': traffic[direction][billing], 'direction': direction, 'billing': 'billing', 'address': address_string})
+                                    logging.info("not submitting %(octets)i for %(direction)s.%(billing)s because %(address)s is not a tenant or router IP" % {'octets': traffic[direction][billing], 'direction': direction, 'billing': billing, 'address': address_string})
                                     continue
 
                                 ceilometer_record = {
