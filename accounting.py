@@ -408,6 +408,10 @@ class AccountingCollector(object):
                         for billing in self.classified_networks.keys()+[self.unclassifiable_network]:
                             if traffic[direction][billing] > 0:
 
+                                if address_string not in new_ip_ownership:
+                                    logging.info("not submitting %(octets)i for %(direction)s.%(billing)s. because %(address)s is not a tenant or router IP" % {'octets': traffic[direction][billing], 'direction': direction, 'billing': 'billing', 'address': address_string})
+                                    continue
+
                                 ceilometer_record = {
                                     'counter_name': 'traffic.%s.%s' % (direction, billing),
                                     'counter_volume': traffic[direction][billing],
@@ -416,11 +420,7 @@ class AccountingCollector(object):
                                     'timestamp': datetime.datetime.utcnow().isoformat(),
                                 }
                     
-                                if address_string not in new_ip_ownership:
-                                    logging.info("not submitting %(sample)s because %(address)s is not a tenant or router IP" % {'sample': repr(ceilometer_record), 'address': address_string})
-                                    continue
-                                else:
-                                    logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(ceilometer_record), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
+                                logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(ceilometer_record), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
 
                                 try:
                                     if ceilometer_is_working:
