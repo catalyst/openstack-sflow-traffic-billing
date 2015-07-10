@@ -496,8 +496,8 @@ def accounting(queue):
         try:
             collector = AccountingCollector(queue)
             collector.process_queue()
-        except:
-            logging.error("exception in accounting process, will restart it")
+    except Exception as e:
+        logging.error("exception in accounting process, will restart it: %s" % str(e))
 
 
 if __name__ == '__main__':
