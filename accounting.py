@@ -32,6 +32,7 @@ import os
 import sqlite3
 import sys
 import time
+import uuid
 
 # XXX remove when debugging is complete
 import pdb
@@ -386,6 +387,7 @@ class AccountingCollector(object):
 
             if time.time() - timestamp >= self.buffer_flush_interval and len(totals) > 0:
                 start_time = time.time()
+                submitted_sample_count = 0
                 logging.info("sending ceilometer data for %i local IPs" % len(totals))
 
                 # re-request the mapping of IP addresses to tenants from OpenStack
@@ -419,6 +421,8 @@ class AccountingCollector(object):
                                     'resource_id': new_ip_ownership[address_string]['id'],
                                     'timestamp': datetime.datetime.utcnow().isoformat(),
                                 }
+
+                                metadata_uuid = str(uuid.uuid4())
                     
                                 logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(ceilometer_record), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
 
@@ -426,7 +430,7 @@ class AccountingCollector(object):
                                     if ceilometer_is_working:
                                         self.clients[new_ip_ownership[address_string]['region']]['ceilometer'].samples.create(
                                             source='TrafficAccounting',
-                                            resource_metadata={},
+                                            resource_metadata={'uuid': metadata_uuid},
                                             counter_type='delta',
                                             counter_unit='byte',
                                             **ceilometer_record
@@ -435,14 +439,16 @@ class AccountingCollector(object):
                                         raise Exception("Ceilometer is not working.")
                                 except:
                                     ceilometer_is_working = False
-                                    logging.info("ceilometer is broken, putting in database instead")
+                                    logging.debug("ceilometer is broken, putting in database instead")
                                     ceilometer_record.update({'region': new_ip_ownership[address_string]['region']})
                                     self.local_queue_cursor.execute(
                                         "INSERT INTO queue VALUES(:counter_name, :counter_volume, :project_id, :resource_id, :region, datetime('now'), null);",
                                         ceilometer_record,
                                     )
                                 else:
+                                    submitted_sample_count += 1
                                     self._mark_success(self.success_file)
+                                    logging.debug("created sample %s" % metadata_uuid)
 
                 # try and cut down the number of queued-on-disk items waiting to go to ceilometer
                 while ceilometer_is_working and time.time() - start_time < 300:
@@ -452,10 +458,11 @@ class AccountingCollector(object):
                     logging.info("attempting to re-submit %i samples spooled on disk..." % len(database_samples))
                     for row in database_samples:
                         try:
+                            metadata_uuid = str(uuid.uuid4())
                             logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(row), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
                             self.clients[row[4]]['ceilometer'].samples.create(
                                 source='TrafficAccounting',
-                                resource_metadata={},
+                                resource_metadata={'uuid': metadata_uuid},
                                 counter_type='delta',
                                 counter_unit='byte',
                                 counter_name=row[0],
@@ -468,10 +475,12 @@ class AccountingCollector(object):
                             logging.debug("ceilometer is still broken, will get this record next time around")
                             break
                         else:
+                            submitted_sample_count += 1                          
                             self.local_queue_cursor.execute('DELETE FROM queue WHERE id=?', (row[6],))
+                            logging.debug("unqueued sample %s" % metadata_uuid)
 
                 self.local_queue_conn.commit()
-                logging.info("ceilometer send complete, took %f seconds" % (time.time() - start_time))
+                logging.info("ceilometer send complete, took %f seconds and sent %i samples" % ((time.time() - start_time)), submitted_sample_count)
                 logging.info("in-memory queue is now %i entries long" % self.queue.qsize())
 
                 # XXX this is a terrible way to report the state, but it will do for now
@@ -496,8 +505,8 @@ def accounting(queue):
         try:
             collector = AccountingCollector(queue)
             collector.process_queue()
-    except Exception as e:
-        logging.error("exception in accounting process, will restart it: %s" % str(e))
+        except Exception as e:
+            logging.error("exception in accounting process, will restart it: %s" % str(e))
 
 
 if __name__ == '__main__':
