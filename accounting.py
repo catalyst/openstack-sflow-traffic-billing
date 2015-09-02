@@ -480,7 +480,7 @@ class AccountingCollector(object):
                             logging.debug("unqueued sample %s" % metadata_uuid)
 
                 self.local_queue_conn.commit()
-                logging.info("ceilometer send complete, took %f seconds and sent %i samples" % ((time.time() - start_time)), submitted_sample_count)
+                logging.info("ceilometer send complete, took %f seconds and sent %i samples" % (((time.time() - start_time)), submitted_sample_count))
                 logging.info("in-memory queue is now %i entries long" % self.queue.qsize())
 
                 # XXX this is a terrible way to report the state, but it will do for now
@@ -510,7 +510,7 @@ def accounting(queue):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
+    logging.basicConfig(level=logging.DEBUG, format='%(asctime)s %(levelname)s:%(message)s')
 
     # reduce the logging verbosity of some openstack components
     logging.getLogger("neutronclient.client").setLevel(logging.ERROR)
