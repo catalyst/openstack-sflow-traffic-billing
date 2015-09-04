@@ -273,6 +273,8 @@ class AccountingCollector(object):
         self.success_file = self.config.get('settings','success-file')
         # file in to which undesirable queue length will be reported
         self.queue_length_file = self.config.get('settings','queue-length-file')
+        # spool directory where agents seen will be reported
+        self.seen_agent_spool_directory = self.config.get('settings','seen-agent-spool-directory')
 
         # the number of seconds between submissions to ceilometer
         self.buffer_flush_interval = int(self.config.get('settings','buffer-flush-interval'))
@@ -325,12 +327,14 @@ class AccountingCollector(object):
 
         timestamp = int(time.time())
         totals = {}
+        seen_agents = set()
 
         memory_queue_lengths = collections.deque([], 5)
         disk_queue_lengths = collections.deque([], 5)
 
         while True:
             sflow_packet = self.queue.get()
+            seen_agents.add(sflow_packet['agent_address'])
 
             # "samples" can be of several types, only "flow" samples will end up here
             # XXX add checks so sflow code can be made more generic
@@ -498,6 +502,10 @@ class AccountingCollector(object):
                     self._mark_success(self.queue_length_file, '0\n')
 
                 totals = {}
+                for agent in seen_agents:
+                    self._mark_success("%s/%s" % (self.seen_agent_spool_directory, str(agent)))
+                    
+                seen_agents = set()
                 timestamp = int(time.time())
 
 def accounting(queue):
