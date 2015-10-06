@@ -29,6 +29,7 @@ import datetime
 import logging
 import multiprocessing
 import os
+import signal
 import sqlite3
 import sys
 import time
@@ -537,9 +538,22 @@ if __name__ == '__main__':
 
     collector = sflow.FlowCollector()
 
+    def signal_handler(*args):
+        accounting_process.terminate()
+        sys.exit()
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    signal.signal(signal.SIGKILL, signal_handler)
+
     # receieve sFlow packets from the network and send them to the accounting process
-    for sflow_packet in collector.receive():
-        accounting_packet_queue.put(sflow_packet)
+    try:
+        for sflow_packet in collector.receive():
+            accounting_packet_queue.put(sflow_packet)
+    except:
+        accounting_process.join()
+    finally:
+        accounting_process.terminate()
 
     accounting_process.join()
     logging.shutdown()
