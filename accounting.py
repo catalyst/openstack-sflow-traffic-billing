@@ -544,7 +544,6 @@ if __name__ == '__main__':
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGKILL, signal_handler)
 
     # receieve sFlow packets from the network and send them to the accounting process
     try:
