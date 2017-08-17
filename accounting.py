@@ -34,6 +34,7 @@ import sqlite3
 import sys
 import time
 import uuid
+import yaml
 
 # XXX remove when debugging is complete
 import pdb
@@ -62,11 +63,73 @@ class ForkedPdb(pdb.Pdb):
             sys.stdin = _stdin
 
 
+class IPDict(object):
+    """A dict-like implementation for IP management.
+
+    Currently, only four operations are supported:
+    >>> ips = IPDict(
+    ...     ips={'192.168.1.10': {'region': 'region1', 'tenant_id': '111', 'id': '123', 'type': 'floating'},
+    ...          '192.168.2.10': {'region': 'region2', 'tenant_id': '222', 'id': '456', 'type': 'floating'}},
+    ...     ip_ranges={'region1': {'tenant1': [ipaddr.IPNetwork('10.10.1.0/24'), ipaddr.IPNetwork('10.20.1.0/24')]}}
+    ... )
+    >>> ips['192.168.2.10']
+    {'tenant_id': '222', 'region': 'region2', 'type': 'floating', 'id': '456'}
+    >>> ips['10.20.1.15']
+    {'tenant_id': 'tenant1', 'region': 'region1', 'type': 'public', 'id': '10.20.1.15'}
+    >>> '10.10.1.125' in ips
+    True
+    >>> for address, details in ips.iteritems():
+    ...     print address, details['tenant_id']
+    ...
+    192.168.2.10 222
+    192.168.1.10 111
+    """
+
+    def __init__(self, ips=None, ip_ranges=None, **kwargs):
+        self.ips = ips or {}
+        self.ip_ranges = ip_ranges or {}
+
+    def __getitem__(self, ip):
+        if ip in self.ips:
+            return self.ips[ip]
+
+        ip_address = ipaddr.IPAddress(ip)
+        for region, tenant_networks in self.ip_ranges.items():
+            for tenant, netowrks in tenant_networks.items():
+                if any([ip_address in network for network in netowrks]):
+                    return {
+                        'region': region,
+                        'tenant_id': tenant,
+                        'id': ip,
+                        'type': 'public'
+                    }
+
+        raise KeyError(key)
+
+    def __contains__(self, ip):
+        if ip in self.ips:
+            return True
+
+        ip_address = ipaddr.IPAddress(ip)
+        for region, tenant_networks in self.ip_ranges.items():
+            for tenant, netowrks in tenant_networks.items():
+                if any([ip_address in network for network in netowrks]):
+                    return True
+
+        return False
+
+    def items(self):
+        return self.ips.items()
+
+    def iteritems(self):
+        return self.ips.iteritems()
+
+
 class AccountingCollector(object):
     """
     Processes incoming packets and submits samples to Ceilometer.
     """
-    
+
     SFLOW_INTERFACE_INTERNAL = 0x3FFFFFFF
 
     @staticmethod
@@ -216,9 +279,11 @@ class AccountingCollector(object):
         and routers and return an aggregate dictionary.
         """
 
-        ip_list = self._neutron_floating_ip_list()
-        ip_list.update(self._neutron_router_ip_list())
-        return ip_list
+        ips = self._neutron_floating_ip_list()
+        ips.update(self._neutron_router_ip_list())
+
+        ip_collection = IPDict(ips=ips, ip_ranges=self.byo_networks)
+        return ip_collection
 
     def _load_networks_from_file(self, filename):
         """
@@ -241,6 +306,12 @@ class AccountingCollector(object):
 
         return networks
 
+    def _load_byo_networks(self, conf):
+        for region, tenant_networks in conf.items():
+            for tenant, ip_ranges in tenant_networks.items():
+                for range in ip_ranges:
+                    ip_list = self.byo_networks[region].setdefault(tenant, [])
+                    ip_list.append(ipaddr.IPNetwork(range))
 
     def __init__(self, queue):
         self.queue = queue
@@ -300,6 +371,24 @@ class AccountingCollector(object):
             self.unclassifiable_network = self.config.get('settings','unclassifiable') # fall back if no classification possible
         except:
             raise Exception("unable to load network classifications")
+
+        # Load byo_networks if the config exists.
+        self.byo_networks = collections.defaultdict(dict)
+        try:
+            byo_networks_file = self.config.get('settings',
+                                                'byo_networks_file')
+
+            if byo_networks_file:
+                try:
+                    with open(byo_networks_file, 'r') as f:
+                        byo_network_config = yaml.safe_load(f)
+
+                    self._load_byo_networks(byo_network_config)
+                except:
+                    raise Exception("unable to load %s" % byo_networks_file)
+        except ConfigParser.NoOptionError:
+            pass
+
 
     def process_queue(self):
         """
@@ -428,7 +517,7 @@ class AccountingCollector(object):
                                 }
 
                                 metadata_uuid = str(uuid.uuid4())
-                    
+
                                 logging.debug("submitting %(sample)s (region=%(region)s, ip=%(address)s)" % {'sample': repr(ceilometer_record), 'address': address_string, 'region': new_ip_ownership[address_string]['region']})
 
                                 try:
@@ -480,7 +569,7 @@ class AccountingCollector(object):
                             logging.debug("ceilometer is still broken, will get this record next time around")
                             break
                         else:
-                            submitted_sample_count += 1                          
+                            submitted_sample_count += 1
                             self.local_queue_cursor.execute('DELETE FROM queue WHERE id=?', (row[6],))
                             logging.debug("unqueued sample %s" % metadata_uuid)
 
@@ -505,7 +594,7 @@ class AccountingCollector(object):
                 totals = {}
                 for agent in seen_agents:
                     self._mark_success("%s/%s" % (self.seen_agent_spool_directory, str(agent)))
-                    
+
                 seen_agents = set()
                 timestamp = int(time.time())
 
